@@ -5,6 +5,10 @@
 import { getState, update, uid } from './state.js';
 import { el, clear, openSheet, toast, formatClock, segmented } from './ui/ui.js';
 
+// Die Anzeige ist sekundengenau – ein Vierteltakt hätte nur viermal so viele
+// Aufwachvorgänge gekostet, ohne dass man etwas davon sieht.
+const TICK_MS = 1000;
+
 let ticker = null;
 let wakeLock = null;
 let audioCtx = null;
@@ -125,14 +129,22 @@ async function refreshWakeLock() {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { refreshWakeLock(); renderTimers(); }
+  if (document.visibilityState === 'visible') {
+    refreshWakeLock();
+    ensureTicking();
+    tick();
+  } else if (ticker) {
+    // Zeit läuft über Zeitstempel weiter – der Takt darf ruhen
+    clearInterval(ticker);
+    ticker = null;
+  }
 });
 
 /* ---------- Tick ---------- */
 
 function ensureTicking() {
   const running = getState().timers.some((t) => t.running);
-  if (running && !ticker) ticker = setInterval(tick, 250);
+  if (running && !ticker) ticker = setInterval(tick, TICK_MS);
   if (!running && ticker) { clearInterval(ticker); ticker = null; tick(); }
   refreshWakeLock();
 }
@@ -148,7 +160,8 @@ function tick() {
     }
   }
   if (changed) update(() => {});
-  renderTimers();
+  if (changed) renderTimers(); else updateFaces();
+  updateBadge();
   document.dispatchEvent(new CustomEvent('jetlag:tick'));
 }
 
@@ -214,11 +227,39 @@ export function openNewTimerSheet() {
   });
 }
 
+// Nur die Ziffern austauschen, solange sich die Timerliste selbst nicht ändert.
+// Ein kompletter DOM-Neuaufbau pro Sekunde ist auf älteren Geräten spürbar.
+let renderedSignature = null;
+const faceNodes = new Map();
+
+export function updateFaces() {
+  if (!faceNodes.size) return;
+  const now = Date.now();
+  for (const t of getState().timers) {
+    const node = faceNodes.get(t.id);
+    if (!node) continue;
+    const rest = remaining(t, now);
+    const over = t.kind === 'countdown' && rest <= 0;
+    const text = formatClock(rest);
+    if (node.face.textContent !== text) node.face.textContent = text;
+    node.face.classList.toggle('over', over);
+    if (node.bar) {
+      node.bar.style.width = `${Math.max(0, Math.min(100, (rest / t.duration) * 100))}%`;
+      node.bar.style.background = over ? 'var(--danger)' : 'var(--accent)';
+    }
+  }
+}
+
 export function renderTimers() {
   const host = document.getElementById('timer-list');
   if (!host || document.getElementById('panel-timers').hidden) { updateBadge(); return; }
   const s = getState();
   const now = Date.now();
+
+  const signature = s.timers.map((t) => `${t.id}:${t.running}:${t.kind}:${t.duration}:${t.name}`).join('|');
+  if (signature === renderedSignature) { updateFaces(); updateBadge(); return; }
+  renderedSignature = signature;
+  faceNodes.clear();
   clear(host);
 
   if (!s.timers.length) {
@@ -232,12 +273,16 @@ export function renderTimers() {
   for (const t of s.timers) {
     const rest = remaining(t, now);
     const over = t.kind === 'countdown' && rest <= 0;
+    const face = el('div', { class: `timer-face ${over ? 'over' : ''}`, text: formatClock(rest) });
+    const bar = t.kind === 'countdown'
+      ? el('i', { style: { width: `${Math.max(0, Math.min(100, (rest / t.duration) * 100))}%`, background: over ? 'var(--danger)' : 'var(--accent)' } })
+      : null;
+    faceNodes.set(t.id, { face, bar });
     host.append(el('div', { class: 'card' },
       el('div', { class: 'card-title' }, el('span', { class: 'grow', text: t.name }),
         el('span', { class: 'card-sub', text: t.kind === 'countdown' ? 'Countdown' : 'Stoppuhr' })),
-      el('div', { class: `timer-face ${over ? 'over' : ''}`, text: formatClock(rest) }),
-      t.kind === 'countdown' ? el('div', { class: 'progress' },
-        el('i', { style: { width: `${Math.max(0, Math.min(100, (rest / t.duration) * 100))}%`, background: over ? 'var(--danger)' : 'var(--accent)' } })) : null,
+      face,
+      bar ? el('div', { class: 'progress' }, bar) : null,
       el('div', { class: 'row row-wrap' },
         el('button', { class: 'btn btn-small', onclick: () => { primeAudio(); toggleTimer(t.id); renderTimers(); } }, t.running ? '⏸ Pause' : '▶︎ Start'),
         el('button', { class: 'btn btn-small', onclick: () => { resetTimer(t.id); renderTimers(); } }, '↺'),

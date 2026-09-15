@@ -53,9 +53,51 @@ Beides ist unter *Mehr → Einstellungen* frei änderbar (Radius-Vorgaben, Radiu
 - Würfel W2–W20 und eigene Listen für Karten, Flüche oder Aufgaben
 - OpenStreetMap-Abfragen: Orte im Umkreis, nächstgelegenes Objekt, sowie eine Gebietssuche
   über Dörfer, Ortsteile, Stadtviertel und Gemeinden im Umkreis (nicht nur am eigenen Standort)
-- Kartenkacheln offline speichern
+- **Spielgebiet vorbereiten**: Orte, Grenzen, Bezugsgeometrien und Kartenkacheln einmal
+  herunterladen, danach läuft die ganze Runde ohne Netz
 - Spielstand per QR-Code oder Link zwischen Handys teilen
 - „Zufallspunkt im Restgebiet" und eine Analyse, welche Radiusfrage das Gebiet am besten halbiert
+
+## Offline spielen
+
+Unter *Mehr → Offline-Vorrat → Gebiet vorbereiten* lädt die App einmal alles herunter, was
+die Fragen später brauchen:
+
+- die Orte jeder Kategorie, die im Regelwerk vorkommt (Museen, Bibliotheken, Bahnhöfe …)
+- die Geometrie jedes Bezugsobjekts für Vergleichsfragen (Autobahnen, Flüsse, Grenzen …)
+- die Orts- und Grenzliste für die Gebietsauswahl (Dörfer, Ortsteile, Gemeinden)
+- die Kartenkacheln des Gebiets
+
+Danach beantwortet die App jede Abfrage aus dem eigenen Bestand – im Funkloch, in der
+U-Bahn, ohne Wartezeit. Welche Quellen gebraucht werden, leitet sie aus dem aktiven
+Regelwerk ab; ein eigenes Regelwerk ändert die Liste automatisch mit.
+
+Zwischen den Abfragen wartet die App bewusst knapp eine Sekunde. Die
+OpenStreetMap-Server sind gespendete Infrastruktur, und ein Schwall von dreißig Abfragen
+wäre unfein – dafür ist es der einzige Schwall für die ganze Runde. Objekte, die weit
+außerhalb des Spielgebiets liegen (eine Küste 400 km entfernt), werden übersprungen und
+bleiben online abrufbar; der Bericht am Ende sagt, was fehlt.
+
+## Auf schwachen Geräten
+
+Die App ist auf ältere Telefone ausgelegt. Unter *Mehr → Einstellungen → Stromsparmodus*
+lässt sich das steuern; die Vorgabe **automatisch** schaltet ihn bei Geräten mit höchstens
+vier Kernen oder vier Gigabyte Speicher selbst ein. Dann rechnet die Restflächen-Schätzung
+mit weniger Stichproben, die Maske zeichnet mit geringerer Auflösung und nur jedes zweite
+Bild, und die Karte verzichtet auf Animationen.
+
+Unabhängig davon spart die App Strom, wo es nichts kostet:
+
+- **GPS läuft nur, wenn es gebraucht wird.** Im Hintergrund, bei eingefrorener und bei von
+  Hand gesetzter Position wird die Ortung abgeschaltet – der Frier-Knopf auf der Karte ist
+  damit auch ein Stromsparknopf.
+- **Der Positionsmarker wird nur bei echter Bewegung neu gezeichnet** (ab zwei Metern),
+  statt bei jedem eintreffenden Fix.
+- **Timer takten im Sekundenrhythmus** statt viermal pro Sekunde, ruhen im Hintergrund und
+  tauschen nur die Ziffern aus, statt die Liste neu aufzubauen. Gerechnet wird über
+  Zeitstempel, es geht also nichts verloren.
+- **Die Maske überspringt, was außerhalb des Bildausschnitts liegt**, und zeichnet einfache
+  Formen ohne Zwischenpuffer.
 
 ## Regelwerk
 
@@ -167,16 +209,22 @@ js/timers.js        Timer-Engine auf Zeitstempelbasis
 js/rounds.js        Teams, Runden, Wertung, Protokoll
 js/share.js         Export/Import über gepackte Links und QR-Codes
 js/tiles.js         Offline-Kachelcache
+js/bundle.js        Ablage der vorab geladenen Gebietsdaten
+js/prefetch.js      Spielgebiet vorbereiten: sammelt alles Nötige ein
 js/state.js         Zustand, Persistenz, Undo
 ```
 
-Zwei Entscheidungen, die den Rest erklären:
+Drei Entscheidungen, die den Rest erklären:
 
 - **Keine Geometriebibliothek.** Die Maske entsteht durch Übereinanderzeichnen auf einem
   Canvas (`mask.js`), nicht durch boolesche Polygonoperationen. Vereinigungen werden
   übereinandergemalt, Schnitte (die Zelle einer verneinten Matching-Frage) durch Füllen
   und Ausstanzen. Statistik und Zufallspunkte laufen stattdessen analytisch über
   `allows()` – unabhängig von Zoom und Bildausschnitt.
+- **Die heißen Pfade rechnen ohne Allokation.** Die Restflächen-Schätzung wertet jede
+  Frage an tausenden Stichproben aus; `distanceToLine` und Verwandte arbeiten deshalb mit
+  einmal berechneten Projektionsfaktoren, quadrierten Abständen und ohne Zwischenobjekte.
+  Das brachte den Faktor sieben gegenüber der ersten, gut lesbaren Fassung.
 - **Alles in lokalen Metern gerechnet.** Kreise und Mittelsenkrechten werden geodätisch
   bestimmt und als Punktfolge zurückprojiziert. Eine im Bildschirmraum gerade gezogene
   Trennlinie läge auf Stadtmaßstab bereits sichtbar falsch.

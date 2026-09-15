@@ -39,10 +39,17 @@ export function allows(c, p) {
       return c.inside ? inside : !inside;
     }
     case 'nearest': {
-      const chosen = c.pois.find((x) => x.id === c.chosenId);
-      if (!chosen) return true;
-      const d = distance(p, chosen);
-      const isNearest = c.pois.every((o) => o.id === c.chosenId || distance(p, o) >= d);
+      // Für ein Argmin genügen quadrierte Abstände in lokaler Näherung – das spart
+      // die Trigonometrie der Haversine-Formel bei jeder einzelnen Stichprobe.
+      const mLng = 111319.49 * Math.cos(p.lat * Math.PI / 180);
+      let bestId = null, best = Infinity;
+      for (const o of c.pois) {
+        const dx = (o.lng - p.lng) * mLng, dy = (o.lat - p.lat) * 111319.49;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < best) { best = d2; bestId = o.id; }
+      }
+      if (bestId === null) return true;
+      const isNearest = bestId === c.chosenId;
       // invert: "nein, mein nächstes X ist ein anderes" – dann fällt genau diese Zelle weg
       return c.invert ? !isNearest : isNearest;
     }
@@ -167,8 +174,22 @@ export function describe(c, unit = 'metric') {
   }
 }
 
+// Billige Bedingungen zuerst: eine Radiusfrage kostet ein paar Rechenschritte,
+// eine Vergleichsfrage gegen eine Autobahn ein paar hundert. Wenn die billige
+// den Punkt schon ausschließt, muss die teure gar nicht mehr laufen.
+function isCheap(c) {
+  if (c.type === 'radius' || c.type === 'thermo' || c.type === 'sector') return true;
+  if (c.type === 'compare') return !(c.features && c.features.length);
+  return false;
+}
+
 export function allowsAll(list, p) {
-  for (const c of list) if (c.active !== false && !allows(c, p)) return false;
+  for (const c of list) {
+    if (c.active !== false && isCheap(c) && !allows(c, p)) return false;
+  }
+  for (const c of list) {
+    if (c.active !== false && !isCheap(c) && !allows(c, p)) return false;
+  }
   return true;
 }
 
@@ -224,12 +245,12 @@ function randomInBounds(b, rnd = Math.random) {
 // Monte-Carlo: Anteil des Spielgebiets, der nach allen aktiven Fragen übrig bleibt.
 // Bei kleinen Restgebieten treffen zu wenige Stichproben, um eine stabile Zahl zu geben –
 // dann wird nachgezogen, statt eine zappelnde Prozentangabe anzuzeigen.
-export function remainingStats(area, list, samples = 6000) {
+export function remainingStats(area, list, samples = 6000, maxRounds = 3) {
   const b = areaBounds(area);
   if (!b) return { fraction: null, inArea: 0, remaining: 0, samples: 0, precise: false };
 
   let total = 0, inArea = 0, remaining = 0;
-  for (let round = 0; round < 3; round++) {
+  for (let round = 0; round < maxRounds; round++) {
     const n = samples * 4 ** round - total;
     for (let i = 0; i < n; i++) {
       const p = randomInBounds(b);

@@ -4,6 +4,8 @@
 
 const listeners = new Set();
 let watchId = null;
+let paused = false;   // vom Seitenwechsel angehalten
+let wanted = false;   // soll überhaupt geortet werden?
 let live = null;      // letzte echte GPS-Position
 let override = null;  // {lat,lng,source:'manual'|'frozen'}
 let lastError = null;
@@ -38,8 +40,31 @@ export function isOverridden() {
   return !!override;
 }
 
+// Dauerhaftes GPS ist der größte Stromfresser der App. Deshalb läuft die Ortung nur,
+// wenn sie auch gebraucht wird: nicht im Hintergrund, nicht bei eingefrorener oder
+// von Hand gesetzter Position.
 export function start() {
-  if (watchId != null || !navigator.geolocation) return;
+  wanted = true;
+  resume();
+}
+
+export function stop() {
+  wanted = false;
+  clearWatch();
+}
+
+function clearWatch() {
+  if (watchId != null) navigator.geolocation.clearWatch(watchId);
+  watchId = null;
+}
+
+export function isWatching() {
+  return watchId != null;
+}
+
+function resume() {
+  if (!wanted || paused || override || watchId != null || !navigator.geolocation) return;
+  const sparsam = accuracyMode === 'saving';
   watchId = navigator.geolocation.watchPosition(
     (pos) => {
       lastError = null;
@@ -62,30 +87,52 @@ export function start() {
           : 'Standort nicht verfügbar';
       emit();
     },
-    { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
+    {
+      enableHighAccuracy: !sparsam,
+      maximumAge: sparsam ? 15000 : 2000,
+      timeout: 20000,
+    },
   );
 }
 
-export function stop() {
-  if (watchId != null) navigator.geolocation.clearWatch(watchId);
-  watchId = null;
+let accuracyMode = 'high';
+
+export function setAccuracyMode(mode) {
+  if (mode === accuracyMode) return;
+  accuracyMode = mode;
+  clearWatch();
+  resume();
 }
 
+export function accuracy() {
+  return accuracyMode;
+}
+
+// Im Hintergrund braucht niemand Positionsaktualisierungen.
+document.addEventListener('visibilitychange', () => {
+  paused = document.visibilityState !== 'visible';
+  if (paused) clearWatch(); else resume();
+});
+
+// Eingefroren oder manuell gesetzt heißt: GPS darf schlafen.
 export function freeze() {
   const base = live || override;
   if (!base) return false;
   override = { ...base, source: 'frozen' };
+  clearWatch();
   emit();
   return true;
 }
 
 export function setManual(latlng) {
   override = { lat: latlng.lat, lng: latlng.lng, accuracy: null, timestamp: Date.now(), source: 'manual' };
+  clearWatch();
   emit();
 }
 
 export function release() {
   override = null;
+  resume();
   emit();
 }
 

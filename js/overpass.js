@@ -4,6 +4,7 @@
 
 import { getState } from './state.js';
 import { areaBounds } from './constraints.js';
+import { bundleGet, bundleCovers } from './bundle.js';
 import { distance, formatDistance, simplify, destination, circle, distanceToFeatures } from './geo.js';
 import { el, clear, openSheet, toast } from './ui/ui.js';
 
@@ -133,6 +134,15 @@ function toPoints(json, { namedOnly = true } = {}) {
 export async function findPois(center, categoryId, radiusM, namedOnly = true) {
   const cat = CATEGORIES.find((c) => c.id === categoryId);
   if (!cat) throw new Error('Unbekannte Kategorie');
+
+  // Vorab geladene Daten kosten kein Netz und keine Wartezeit
+  const vorrat = bundleCovers(center) ? await bundleGet(`pois/${categoryId}`) : null;
+  if (vorrat) {
+    return vorrat
+      .map((p) => ({ ...p, distance: distance(center, p) }))
+      .filter((p) => p.distance <= radiusM)
+      .sort((a, b) => a.distance - b.distance);
+  }
   const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
     + `nwr${cat.filter}(around:${Math.round(radiusM)},${center.lat.toFixed(6)},${center.lng.toFixed(6)});out center tags;`;
   const json = await query(ql);
@@ -278,21 +288,40 @@ function fitBudget(features, budget = 6000) {
 // Spielgebiet plus den gemessenen Abstand abdeckt – sonst läge ein Punkt am anderen
 // Ende des Gebiets scheinbar weit von der Autobahn weg, nur weil deren Teilstücke
 // dort nicht mitgeladen wurden. OSM zerlegt lange Wege in viele kurze Stücke.
-export async function findNearestFeatures(center, refId, { area = null } = {}) {
+export async function findNearestFeatures(center, refId, { area = null, maxKm = null } = {}) {
   const spec = reference(refId);
   if (!spec) throw new Error(`Unbekanntes Bezugsobjekt "${refId}"`);
   const q = spec.q || poiFilter(spec.from);
   if (!q) throw new Error(`Für "${spec.label}" ist keine Abfrage hinterlegt`);
   const timeout = getState().settings.overpassTimeout || 25;
 
+  const vorrat = bundleCovers(center) ? await bundleGet(`refs/${refId}`) : null;
+  if (vorrat && vorrat.length) {
+    const sortiert = vorrat
+      .map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
+      .sort((a, b) => a.distance - b.distance);
+    return {
+      label: spec.label, features: sortiert,
+      distance: sortiert[0].distance, name: sortiert[0].name,
+      coveredKm: null, offline: true,
+    };
+  }
+
+  // maxKm begrenzt die Suchleiter – beim Vorabladen soll eine 400 km entfernte
+  // Küste nicht das halbe Land herunterziehen.
+  const leiter = maxKm ? spec.ladder.filter((km) => km <= maxKm) : spec.ladder;
+  if (!leiter.length) {
+    throw new Error(`${spec.label}: liegt weiter als ${Math.round(maxKm)} km entfernt`);
+  }
+
   let hitKm = null;
   let feats = [];
-  for (const km of spec.ladder) {
+  for (const km of leiter) {
     feats = featuresFrom(await query(aroundQuery(q, center, km, timeout)), spec, center);
     if (feats.length) { hitKm = km; break; }
   }
   if (!feats.length) {
-    throw new Error(`Kein ${spec.label} im Umkreis von ${spec.ladder[spec.ladder.length - 1]} km gefunden`);
+    throw new Error(`${spec.label}: nichts im Umkreis von ${leiter[leiter.length - 1]} km gefunden`);
   }
 
   const nearest = feats[0].distance;
@@ -398,6 +427,14 @@ function bboxAround(center, radius) {
 // Alle Gebiete im Umkreis – nicht nur die, in denen man gerade steht.
 // Genau daran scheiterte das Auswählen einzelner Dörfer vorher.
 export async function findAreas(center, radius) {
+  const vorrat = bundleCovers(center) ? await bundleGet('areas') : null;
+  if (vorrat) {
+    return vorrat
+      .map((c) => ({ ...c, distance: distance(center, c) }))
+      .filter((c) => c.distance <= radius)
+      .sort((a, b) => (a.tier - b.tier) || (a.distance - b.distance));
+  }
+
   const b = bboxAround(center, radius);
   const box = `(${b.south.toFixed(6)},${b.west.toFixed(6)},${b.north.toFixed(6)},${b.east.toFixed(6)})`;
   const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
@@ -503,6 +540,44 @@ function bboxArea(ring) {
   let s = 90, n = -90, w = 180, e = -180;
   for (const p of ring) { s = Math.min(s, p.lat); n = Math.max(n, p.lat); w = Math.min(w, p.lng); e = Math.max(e, p.lng); }
   return (n - s) * (e - w);
+}
+
+// Für das Vorabladen: alles in einem Rechteck statt im Umkreis eines Punktes.
+export async function poisInBox(bounds, categoryId, namedOnly = true) {
+  const cat = CATEGORIES.find((c) => c.id === categoryId);
+  if (!cat) throw new Error('Unbekannte Kategorie');
+  const box = `(${bounds.south.toFixed(6)},${bounds.west.toFixed(6)},${bounds.north.toFixed(6)},${bounds.east.toFixed(6)})`;
+  const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
+    + `nwr${cat.filter}${box};out center tags;`;
+  return toPoints(await query(ql), { namedOnly });
+}
+
+export async function areasInBox(bounds) {
+  const box = `(${bounds.south.toFixed(6)},${bounds.west.toFixed(6)},${bounds.north.toFixed(6)},${bounds.east.toFixed(6)})`;
+  const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
+    + '('
+    + `relation["boundary"="administrative"]["admin_level"~"${ADMIN_RE}"]${box};`
+    + `relation["place"~"${PLACE_RE}"]${box};`
+    + `way["place"~"${PLACE_RE}"]${box};`
+    + `node["place"~"${PLACE_RE}"]${box};`
+    + ');out tags center;';
+  const json = await query(ql);
+  const list = [];
+  for (const e of json.elements || []) {
+    const tags = e.tags || {};
+    if (!tags.name) continue;
+    const lat = e.lat ?? e.center?.lat;
+    const lng = e.lon ?? e.center?.lon;
+    if (lat == null || lng == null) continue;
+    const c = {
+      key: `${e.type}/${e.id}`, type: e.type, id: e.id, tags,
+      name: tags.name, kind: areaKindLabel(tags), rank: areaRank(tags),
+      lat, lng, hasGeometry: e.type !== 'node',
+    };
+    c.tier = areaTier(c);
+    list.push(c);
+  }
+  return list;
 }
 
 /* ---------- Dialoge ---------- */

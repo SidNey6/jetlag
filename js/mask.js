@@ -6,6 +6,7 @@
 // wird dann auf das Sammel-Canvas kopiert. Übrig bleibt hell, was keine Frage ausschließt.
 
 import { destination } from './geo.js';
+import { powerSaving } from './state.js';
 
 const MASK_COLOR = '#0b1020';
 
@@ -31,7 +32,8 @@ export function createMask(L, map, opts = {}) {
 
   function setSize() {
     const s = map.getSize();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // Auf schwachen Geräten kostet jede Verdopplung der Kantenlänge das Vierfache
+    const dpr = Math.min(window.devicePixelRatio || 1, powerSaving() ? 1.25 : 2);
     size = s;
     for (const c of [maskCanvas, edgeCanvas, scratch]) {
       c.width = Math.round(s.x * dpr);
@@ -70,6 +72,14 @@ export function createMask(L, map, opts = {}) {
         ref: map.project(part.excludeRef, zoom),
       })),
     }));
+    // Umgebendes Rechteck je Form – damit außerhalb des Bildausschnitts liegende
+    // Formen gar nicht erst gezeichnet werden.
+    for (const it of items) {
+      const all = it.features && it.features.length
+        ? it.features.flatMap((f) => f.pts)
+        : it.pts;
+      it.box = boxOf(all);
+    }
     if (areaRing) {
       // Alles AUSSERHALB des Spielgebiets fällt weg
       items.push({
@@ -79,6 +89,18 @@ export function createMask(L, map, opts = {}) {
     }
     projCache = { zoom, items };
     return items;
+  }
+
+  function boxOf(pts) {
+    if (!pts || !pts.length) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of pts) {
+      if (p.x < x0) x0 = p.x;
+      if (p.x > x1) x1 = p.x;
+      if (p.y < y0) y0 = p.y;
+      if (p.y > y1) y1 = p.y;
+    }
+    return { x0, y0, x1, y1 };
   }
 
   function toScreen(pt, origin) {
@@ -135,6 +157,9 @@ export function createMask(L, map, opts = {}) {
     ctx.strokeStyle = ctx.fillStyle;
     for (const f of item.features) {
       if (!f.pts.length) continue;
+      const fb = boxOf(f.pts);
+      if (fb && (fb.x1 + r < origin.x || fb.x0 - r > origin.x + size.x
+        || fb.y1 + r < origin.y || fb.y0 - r > origin.y + size.y)) continue;
       if (f.type === 'point') {
         const p = toScreen(f.pts[0], origin);
         ctx.beginPath();
@@ -175,15 +200,39 @@ export function createMask(L, map, opts = {}) {
     const org = map.project(nw, map.getZoom());
     const sctx = scratch.getContext('2d');
 
+    const pxPerM = pixelsPerMeter(map.getZoom());
+    mctx.fillStyle = MASK_COLOR;
+
     for (const item of projectAll()) {
       const hatGeometrie = item.pts.length || (item.parts && item.parts.length) || (item.features && item.features.length);
       if (!hatGeometrie) continue;
-      sctx.clearRect(0, 0, size.x, size.y);
-      sctx.globalCompositeOperation = 'source-over';
-      sctx.fillStyle = MASK_COLOR;
+
+      // Halbebenen und Ausstanzungen reichen über den Rand hinaus – die lassen sich
+      // nicht am Rechteck prüfen. Alles andere schon.
+      if (item.box && (item.kind === 'ring' || item.kind === 'buffer')) {
+        const pad = item.kind === 'buffer' ? item.radiusM * pxPerM : 0;
+        const sichtbar = !(item.box.x1 + pad < org.x || item.box.x0 - pad > org.x + size.x
+          || item.box.y1 + pad < org.y || item.box.y0 - pad > org.y + size.y);
+        if (!sichtbar) {
+          // Außerhalb des Bildes: bei "innen fällt weg" gibt es nichts zu tun,
+          // bei "außen fällt weg" ist der ganze Ausschnitt ausgeschlossen.
+          if (item.exclude === 'outside') {
+            mctx.globalCompositeOperation = 'source-over';
+            mctx.fillRect(0, 0, size.x, size.y);
+          }
+          continue;
+        }
+      }
+
+      // Einfaches Füllen kommt ohne Zwischen-Canvas aus; das spart pro Form zwei
+      // Operationen über die volle Fläche – auf älteren Geräten der Löwenanteil.
+      const direkt = item.kind === 'halfplane' || (item.kind === 'ring' && item.exclude === 'inside');
+      const ctx = direkt ? mctx : sctx;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = MASK_COLOR;
+      if (!direkt) sctx.clearRect(0, 0, size.x, size.y);
 
       if (item.kind === 'buffer') {
-        const pxPerM = pixelsPerMeter(map.getZoom());
         if (item.exclude === 'inside') {
           drawBuffer(sctx, item, org, pxPerM);
         } else {
@@ -197,21 +246,24 @@ export function createMask(L, map, opts = {}) {
         sctx.globalCompositeOperation = 'destination-out';
         for (const part of item.parts) fillPoly(sctx, halfPlanePolygon(part.pts, part.ref, org));
       } else if (item.kind === 'ring') {
+        // ctx ist bei "innen fällt weg" das Ziel-Canvas selbst, sonst der Zwischenpuffer
         if (item.exclude === 'inside') {
-          tracePath(sctx, item.pts, org);
-          sctx.fill();
+          tracePath(ctx, item.pts, org);
+          ctx.fill();
         } else {
-          sctx.fillRect(0, 0, size.x, size.y);
-          sctx.globalCompositeOperation = 'destination-out';
-          tracePath(sctx, item.pts, org);
-          sctx.fill();
+          ctx.fillRect(0, 0, size.x, size.y);
+          ctx.globalCompositeOperation = 'destination-out';
+          tracePath(ctx, item.pts, org);
+          ctx.fill();
         }
       } else {
-        fillPoly(sctx, halfPlanePolygon(item.pts, item.ref, org));
+        fillPoly(ctx, halfPlanePolygon(item.pts, item.ref, org));
       }
 
-      mctx.globalCompositeOperation = 'source-over';
-      mctx.drawImage(scratch, 0, 0, size.x, size.y);
+      if (!direkt) {
+        mctx.globalCompositeOperation = 'source-over';
+        mctx.drawImage(scratch, 0, 0, size.x, size.y);
+      }
 
       // Beim Ausstanzen keine Kanten zeichnen: die Trennlinien liefen quer über die
       // ganze Karte, während die tatsächlich ausgeschlossene Zelle winzig ist.
@@ -234,8 +286,15 @@ export function createMask(L, map, opts = {}) {
     }
   }
 
+  let skipFrame = false;
   function schedule() {
-    if (raf == null) raf = requestAnimationFrame(draw);
+    if (raf != null) return;
+    // Im Sparmodus reicht jedes zweite Bild beim Schwenken
+    if (powerSaving()) {
+      skipFrame = !skipFrame;
+      if (skipFrame) { raf = requestAnimationFrame(() => { raf = null; schedule(); }); return; }
+    }
+    raf = requestAnimationFrame(draw);
   }
 
   function onMove() { reposition(); schedule(); }

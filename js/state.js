@@ -14,6 +14,8 @@ export function emptyState() {
       keepAwake: true,
       radiusRings: [500, 1000, 2000],
       overpassTimeout: 25,
+      powerSave: 'auto',
+      gpsAccuracy: 'high',
     },
     // null = mitgeliefertes Regelwerk (rules/lifack.json); sonst eigenes
     rules: null,
@@ -153,6 +155,18 @@ export function replaceState(next) {
   state = migrate(next);
   save();
   notify();
+}
+
+// Ältere Geräte kosten jede überflüssige Rechnung spürbar Akku und Flüssigkeit.
+// 'auto' erkennt sie an Kernzahl und Speicher.
+export function powerSaving() {
+  const mode = (state.settings && state.settings.powerSave) || 'auto';
+  if (mode === 'on') return true;
+  if (mode === 'off') return false;
+  if (typeof navigator === 'undefined') return false;
+  const kerne = navigator.hardwareConcurrency || 4;
+  const speicher = navigator.deviceMemory || 4;
+  return kerne <= 4 || speicher <= 4;
 }
 
 export function uid(prefix = 'id') {

@@ -1,6 +1,6 @@
 // Start und Verdrahtung: Tabs, Kartenknöpfe, Service Worker, geteilte Links.
 
-import { getState, load, update, undo, undoLabel } from './state.js';
+import { getState, load, update, undo, undoLabel, powerSaving } from './state.js';
 import * as MapMod from './map.js';
 import * as Loc from './location.js';
 import * as C from './constraints.js';
@@ -10,10 +10,11 @@ import * as Rounds from './rounds.js';
 import * as More from './more.js';
 import { consumeHash } from './share.js';
 import * as Rules from './rules.js';
+import { initBundle } from './bundle.js';
 import { el, openSheet, promptSheet, toast } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.3.0';
+window.__JL_VERSION__ = 'v1.4.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -40,15 +41,36 @@ function showTab(name) {
 /* ---------- Restgebiet-Anzeige ---------- */
 
 let statsTimer = null;
+let statsCache = { key: null, label: null, empty: false };
+
+// Signatur des Zustands: dieselbe Lage muss nicht zweimal durchgerechnet werden –
+// ein Tabwechsel allein ist kein Grund für 4000 neue Stichproben.
+function statsKey(area, active) {
+  return JSON.stringify(area) + '|' + active.map((c) => c.id).join(',');
+}
+
 function refreshStats(announce = false) {
   clearTimeout(statsTimer);
   statsTimer = setTimeout(() => {
     const s = getState();
     const chip = document.getElementById('stat-remaining');
     const active = s.constraints.filter((c) => c.active !== false);
-    if (!s.area || !active.length) { chip.hidden = true; return; }
-    const st = C.remainingStats(s.area, active, 4000);
+    if (!s.area || !active.length) { chip.hidden = true; statsCache.key = null; return; }
+
+    const key = statsKey(s.area, active);
+    if (key === statsCache.key && !announce) {
+      chip.hidden = statsCache.label == null;
+      if (statsCache.label != null) {
+        chip.querySelector('b').textContent = statsCache.label;
+        chip.querySelector('b').style.color = statsCache.empty ? 'var(--danger)' : '';
+      }
+      return;
+    }
+
+    const sparsam = powerSaving();
+    const st = C.remainingStats(s.area, active, sparsam ? 2000 : 4000, sparsam ? 2 : 3);
     const label = C.formatFraction(st);
+    statsCache = { key, label, empty: st.remaining === 0 };
     chip.hidden = label == null;
     if (label != null) {
       chip.querySelector('b').textContent = label;
@@ -195,6 +217,11 @@ function boot() {
     e.preventDefault();
     window.__JL_INSTALL_PROMPT__ = e;
   });
+
+  Loc.setAccuracyMode(getState().settings.gpsAccuracy || 'high');
+
+  // Offline-Vorrat kennen, bevor die erste Abfrage losläuft
+  initBundle().catch(() => {});
 
   // Regelwerk nachladen; die Oberfläche läuft auch an, bevor es da ist
   Rules.loadRules()

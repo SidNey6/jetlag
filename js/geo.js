@@ -115,42 +115,112 @@ export function pointInPolygon(p, ring) {
 // Abfragepunkt als Ursprung – damit ist der gesuchte Abstand einfach die Länge des
 // Lotfußpunkt-Vektors.
 
+// Heiß: das hier läuft bei der Restflächen-Schätzung millionenfach. Deshalb ohne
+// Objekt- und Closure-Allokation, mit einmal berechneten Projektionsfaktoren und
+// Vergleich über Quadrate – die Wurzel fällt erst ganz am Ende an.
+function lngDelta(a, b) {
+  let d = a - b;
+  if (d > 180) d -= 360;
+  else if (d < -180) d += 360;
+  return d;
+}
+
 export function distanceToSegment(p, a, b) {
-  const e = enu(p);
-  const A = e.to(a), B = e.to(b);
-  const dx = B.x - A.x, dy = B.y - A.y;
+  return Math.sqrt(sqDistToSegment(p, a, b, metersPerDegLng(p.lat)));
+}
+
+function metersPerDegLng(lat) {
+  return D2R * EARTH_R * Math.cos(lat * D2R);
+}
+
+const M_PER_DEG_LAT = D2R * EARTH_R;
+
+function sqDistToSegment(p, a, b, mLng) {
+  const ax = lngDelta(a.lng, p.lng) * mLng, ay = (a.lat - p.lat) * M_PER_DEG_LAT;
+  const bx = lngDelta(b.lng, p.lng) * mLng, by = (b.lat - p.lat) * M_PER_DEG_LAT;
+  const dx = bx - ax, dy = by - ay;
   const len2 = dx * dx + dy * dy;
-  if (len2 === 0) return Math.hypot(A.x, A.y);
-  let t = -(A.x * dx + A.y * dy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(A.x + t * dx, A.y + t * dy);
+  if (len2 === 0) return ax * ax + ay * ay;
+  let t = -(ax * dx + ay * dy) / len2;
+  t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return cx * cx + cy * cy;
 }
 
 export function distanceToLine(p, points) {
   if (!points || !points.length) return Infinity;
   if (points.length === 1) return distance(p, points[0]);
+  const mLng = metersPerDegLng(p.lat);
   let best = Infinity;
+  let ax = lngDelta(points[0].lng, p.lng) * mLng;
+  let ay = (points[0].lat - p.lat) * M_PER_DEG_LAT;
   for (let i = 1; i < points.length; i++) {
-    const d = distanceToSegment(p, points[i - 1], points[i]);
-    if (d < best) best = d;
+    const bx = lngDelta(points[i].lng, p.lng) * mLng;
+    const by = (points[i].lat - p.lat) * M_PER_DEG_LAT;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let d2;
+    if (len2 === 0) {
+      d2 = ax * ax + ay * ay;
+    } else {
+      let t = -(ax * dx + ay * dy) / len2;
+      t = t < 0 ? 0 : (t > 1 ? 1 : t);
+      const cx = ax + t * dx, cy = ay + t * dy;
+      d2 = cx * cx + cy * cy;
+    }
+    if (d2 < best) best = d2;
+    ax = bx; ay = by;
   }
-  return best;
+  return Math.sqrt(best);
 }
 
 export function distanceToPolygon(p, ring) {
   if (!ring || ring.length < 3) return distanceToLine(p, ring);
   if (pointInPolygon(p, ring)) return 0;
-  return distanceToLine(p, [...ring, ring[0]]);
+  const mLng = metersPerDegLng(p.lat);
+  let best = Infinity;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const d2 = sqDistToSegment(p, ring[j], ring[i], mLng);
+    if (d2 < best) best = d2;
+  }
+  return Math.sqrt(best);
+}
+
+// Umgebende Rechtecke je Objekt, damit weit entfernte Linien gar nicht erst
+// durchgerechnet werden. In einer WeakMap, nicht am Objekt – sonst landeten sie
+// im gespeicherten Spielstand.
+const featureBoxes = new WeakMap();
+
+function featureBox(f) {
+  let b = featureBoxes.get(f);
+  if (!b) {
+    b = boundsOf(f.points);
+    featureBoxes.set(f, b);
+  }
+  return b;
+}
+
+// Untere Schranke für den Abstand zum Rechteck – nie größer als der echte Abstand.
+function boxLowerBound(p, b, mLng) {
+  const dLat = p.lat < b.south ? b.south - p.lat : (p.lat > b.north ? p.lat - b.north : 0);
+  const dLng = p.lng < b.west ? b.west - p.lng : (p.lng > b.east ? p.lng - b.east : 0);
+  if (dLat === 0 && dLng === 0) return 0;
+  const y = dLat * M_PER_DEG_LAT, x = dLng * mLng;
+  return Math.sqrt(x * x + y * y) * 0.999;
 }
 
 // features: [{ type: 'point' | 'line' | 'polygon', points: [{lat,lng}, ...] }]
 export function distanceToFeatures(p, features) {
+  if (!features || !features.length) return Infinity;
+  const mLng = metersPerDegLng(p.lat);
   let best = Infinity;
-  for (const f of features || []) {
+  for (const f of features) {
+    if (!f.points || !f.points.length) continue;
+    if (f.points.length > 2 && boxLowerBound(p, featureBox(f), mLng) >= best) continue;
     let d;
     if (f.type === 'polygon') d = distanceToPolygon(p, f.points);
     else if (f.type === 'line') d = distanceToLine(p, f.points);
-    else d = distance(p, f.points[0] || f);
+    else d = distance(p, f.points[0]);
     if (d < best) best = d;
     if (best === 0) return 0;
   }

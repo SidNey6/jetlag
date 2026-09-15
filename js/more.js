@@ -1,16 +1,18 @@
 // "Mehr": Spielgebiet, Werkzeuge, Offline-Karten, Teilen, Einstellungen.
 
-import { getState, update, replaceState, emptyState, uid } from './state.js';
+import { getState, update, replaceState, emptyState, uid, powerSaving } from './state.js';
 import * as C from './constraints.js';
 import * as Loc from './location.js';
 import * as MapMod from './map.js';
 import { drawPolygon, pointField, unitSuffix, distanceField } from './questions.js';
 import { areaPickerSheet } from './overpass.js';
 import { formatDistance } from './geo.js';
-import { el, clear, openSheet, confirmSheet, promptSheet, toast } from './ui/ui.js';
+import { el, clear, append, openSheet, confirmSheet, promptSheet, toast } from './ui/ui.js';
 import { openDiceSheet, openListsSheet } from './random.js';
 import { openShareSheet, openImportSheet } from './share.js';
-import { tileCacheCard } from './tiles.js';
+import { openTilesSheet, clearTileCache, cacheStats } from './tiles.js';
+import { bundleMeta, bundleStats, clearBundle } from './bundle.js';
+import { prepareArea, planSteps, estimateTiles } from './prefetch.js';
 import { exportText } from './rounds.js';
 import * as Rules from './rules.js';
 import { createTimer } from './timers.js';
@@ -50,10 +52,10 @@ export function render() {
     ),
   ));
 
-  /* Offline-Karten */
-  const tilesSlot = el('div', {});
-  host.append(tilesSlot);
-  tileCacheCard().then((card) => { clear(tilesSlot).append(card); });
+  /* Offline */
+  const offlineSlot = el('div', {});
+  host.append(offlineSlot);
+  offlineCard().then((card) => { clear(offlineSlot).append(card); });
 
   /* Teilen */
   host.append(el('div', { class: 'card' },
@@ -82,6 +84,29 @@ export function render() {
       MapMod.render();
     })),
     settingRow('Display anlassen', toggle(s.settings.keepAwake, (v) => update((st) => { st.settings.keepAwake = v; }))),
+    settingRow('Stromsparmodus', el('div', { class: 'seg' },
+      ...[['auto', 'Auto'], ['on', 'An'], ['off', 'Aus']].map(([v, label]) => el('button', {
+        class: (s.settings.powerSave || 'auto') === v ? 'on' : '',
+        onclick: (e) => {
+          update((st) => { st.settings.powerSave = v; }, null);
+          segOn(e);
+          render();
+          toast(powerSaving() ? 'Sparmodus aktiv' : 'Sparmodus aus');
+        },
+      }, label)))),
+    el('div', { class: 'hint', text: powerSaving()
+      ? 'Aktiv: weniger Stichproben, gröbere Maske, keine Kartenanimationen.'
+      : 'Aus: volle Auflösung und Genauigkeit.' }),
+    settingRow('GPS', el('div', { class: 'seg' },
+      ...[['high', 'Genau'], ['saving', 'Sparsam']].map(([v, label]) => el('button', {
+        class: (s.settings.gpsAccuracy || 'high') === v ? 'on' : '',
+        onclick: (e) => {
+          update((st) => { st.settings.gpsAccuracy = v; }, null);
+          Loc.setAccuracyMode(v);
+          segOn(e);
+        },
+      }, label)))),
+    el('div', { class: 'hint', text: 'Sparsam holt seltener und gröber – reicht, solange ihr euch nicht auf wenige Meter genau verortet. Der Frier-Knopf auf der Karte schaltet das GPS ganz ab.' }),
     el('div', { class: 'row row-wrap' },
       el('button', {
         class: 'btn btn-small',
@@ -509,4 +534,126 @@ function seedDeckLists() {
     }
   }, 'Deck-Listen angelegt');
   toast(`${neu.map((l) => `${l.name} (${l.items.length})`).join(', ')}`, 'ok');
+}
+
+/* ---------- Offline vorbereiten ---------- */
+
+function formatBytes(b) {
+  if (!b) return '0 MB';
+  return `${(b / 1048576).toFixed(1).replace('.', ',')} MB`;
+}
+
+async function offlineCard() {
+  const meta = bundleMeta();
+  const [kacheln, vorrat] = await Promise.all([cacheStats(), bundleStats()]);
+  const s = getState();
+
+  const zeilen = [];
+  if (meta) {
+    const z = meta.zaehler || {};
+    zeilen.push(`${z.pois || 0} Orte · ${z.refs || 0} Geometrien · ${z.orte || 0} Gebiete`);
+    zeilen.push(`${kacheln.count} Kartenkacheln · ${formatBytes(vorrat.bytes)} Daten`);
+    zeilen.push(`vorbereitet am ${new Date(meta.at).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}`);
+    if (meta.fehler?.length) zeilen.push(`${meta.fehler.length} Abfragen fehlgeschlagen`);
+  } else {
+    zeilen.push('Nichts vorbereitet – unterwegs braucht jede Frage dann Empfang.');
+    if (kacheln.count) zeilen.push(`${kacheln.count} Kartenkacheln liegen bereits vor.`);
+  }
+
+  return el('div', { class: 'card' },
+    el('div', { class: 'card-title' },
+      el('span', { class: 'grow', text: 'Offline-Vorrat' }),
+      meta ? el('span', { class: 'card-sub', text: 'bereit' }) : null),
+    ...zeilen.map((t) => el('div', { class: 'card-sub', text: t })),
+    el('div', { class: 'hint', text: 'Lädt Orte, Grenzen, Bezugsgeometrien und Kartenkacheln für dein Spielgebiet einmal herunter. Danach läuft die Runde ohne Netz.' }),
+    el('div', { class: 'row row-wrap' },
+      el('button', {
+        class: 'btn btn-small btn-primary',
+        onclick: () => openPrepareSheet(),
+        disabled: !s.area,
+      }, meta ? 'Neu vorbereiten' : 'Gebiet vorbereiten'),
+      el('button', { class: 'btn btn-small', onclick: () => openTilesSheet() }, 'Nur Kacheln'),
+      (meta || kacheln.count) ? el('button', {
+        class: 'btn btn-small btn-danger',
+        onclick: async () => {
+          if (!(await confirmSheet('Offline-Vorrat löschen?', 'Karten und vorgeladene Daten werden entfernt.', { danger: true, okLabel: 'Löschen' }))) return;
+          await Promise.all([clearBundle(), clearTileCache()]);
+          render();
+          toast('Vorrat geleert', 'ok');
+        },
+      }, 'Löschen') : null,
+    ),
+    !s.area ? el('div', { class: 'hint', text: 'Erst ein Spielgebiet festlegen.' }) : null,
+  );
+}
+
+function openPrepareSheet() {
+  const area = getState().area;
+  if (!area) return toast('Erst ein Spielgebiet festlegen', 'error');
+  let withTiles = true;
+  let zoomExtra = 3;
+  let controller = null;
+
+  openSheet('Spielgebiet vorbereiten', (body, close) => {
+    const plan = planSteps(area, { withTiles, zoomExtra });
+    const info = el('div', { class: 'card-sub' });
+    const bar = el('div', { class: 'progress' }, el('i', { style: { width: '0%' } }));
+    const status = el('div', { class: 'hint' });
+    const detail = el('input', { type: 'range', min: '1', max: '5', value: String(zoomExtra) });
+
+    function refresh() {
+      const p = planSteps(area, { withTiles, zoomExtra });
+      const k = withTiles ? estimateTiles(area, zoomExtra) : 0;
+      info.textContent = `${p.pois.length} Ortskategorien · ${p.refs.length} Bezugsobjekte · 1 Gebietsliste`
+        + (withTiles ? ` · ${k} Kacheln (grob ${Math.round(k * 18 / 1024)} MB)` : '');
+      const sekunden = Math.round((p.pois.length + p.refs.length + 1) * 2.5 + (withTiles ? k / 12 : 0));
+      status.textContent = `Dauer grob ${Math.max(1, Math.round(sekunden / 60))} Minuten. Zwischen den Abfragen wird bewusst gewartet – die OpenStreetMap-Server sind gespendet.`;
+    }
+
+    detail.addEventListener('input', () => { zoomExtra = parseInt(detail.value, 10); refresh(); });
+
+    append(body,
+      el('div', { class: 'hint', text: 'Holt alles, was die Fragen später brauchen: Orte je Kategorie, Geometrie der Bezugsobjekte, Orts- und Grenzliste, dazu die Karte selbst.' }),
+      el('label', { class: 'field' }, 'Kartenkacheln mitladen',
+        el('div', { class: 'seg' },
+          el('button', { class: 'on', onclick: (e) => { withTiles = true; segOn(e); refresh(); } }, 'Ja'),
+          el('button', { onclick: (e) => { withTiles = false; segOn(e); refresh(); } }, 'Nein'))),
+      el('label', { class: 'field' }, 'Kartendetail', detail),
+      info, bar, status,
+    );
+    refresh();
+
+    const startBtn = el('button', {
+      class: 'btn grow btn-primary',
+      onclick: async () => {
+        if (controller) { controller.abort(); return; }
+        controller = new AbortController();
+        startBtn.textContent = 'Abbrechen';
+        try {
+          const meta = await prepareArea(area, {
+            withTiles, zoomExtra, signal: controller.signal,
+            onProgress: ({ erledigt, gesamt, text }) => {
+              bar.firstChild.style.width = `${(erledigt / gesamt) * 100}%`;
+              status.textContent = `${erledigt} / ${gesamt} · ${text}`;
+            },
+          });
+          close();
+          render();
+          toast(meta.fehler.length
+            ? `Vorbereitet, ${meta.fehler.length} Abfragen fehlgeschlagen`
+            : 'Spielgebiet ist offline verfügbar', meta.fehler.length ? '' : 'ok');
+        } catch (e) {
+          status.textContent = String(e.message || e);
+        } finally {
+          controller = null;
+          startBtn.textContent = 'Herunterladen';
+        }
+      },
+    }, 'Herunterladen');
+
+    return [
+      el('button', { class: 'btn grow', onclick: () => { if (controller) controller.abort(); close(); } }, 'Schließen'),
+      startBtn,
+    ];
+  });
 }

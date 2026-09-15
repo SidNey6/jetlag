@@ -1,6 +1,6 @@
 // Karte: Kacheln, eigene Position, Masken-Overlay, Marker, Messwerkzeug, Punktauswahl.
 
-import { getState, update, uid } from './state.js';
+import { getState, update, uid, powerSaving } from './state.js';
 import { createMask } from './mask.js';
 import * as C from './constraints.js';
 import * as Loc from './location.js';
@@ -24,11 +24,16 @@ export function getMap() { return map; }
 
 export function initMap() {
   const s = getState();
+  const sparsam = powerSaving();
   map = L.map('map', {
     zoomControl: false,
     attributionControl: true,
     tap: false,
     worldCopyJump: true,
+    // Animationen sind auf schwachen Geräten der sichtbarste Ruckler
+    zoomAnimation: !sparsam,
+    fadeAnimation: !sparsam,
+    markerZoomAnimation: !sparsam,
   }).setView([51.1657, 10.4515], 6);
 
   setTileSource(s.settings.tileUrl);
@@ -70,6 +75,15 @@ export function tileTemplate() {
 /* ---------- eigene Position ---------- */
 
 let followingProgrammatically = false;
+let lastDrawn = null;
+
+// GPS liefert im Sekundentakt; ohne echte Bewegung gibt es nichts neu zu zeichnen.
+function worthRedrawing(pos) {
+  if (!lastDrawn) return true;
+  if (lastDrawn.source !== pos.source) return true;
+  if (Math.abs((lastDrawn.accuracy || 0) - (pos.accuracy || 0)) > 5) return true;
+  return distance(lastDrawn, pos) > 2;
+}
 
 function renderMe(pos) {
   const el0 = document.getElementById('pos-source');
@@ -79,6 +93,9 @@ function renderMe(pos) {
   if (el0) el0.textContent = showError ? Loc.error() : Loc.sourceLabel();
   if (el1) el1.textContent = pos ? `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}` : '–';
   if (!pos || !map) return;
+  if (!worthRedrawing(pos)) return;
+  const quelleGewechselt = !lastDrawn || lastDrawn.source !== pos.source;
+  lastDrawn = pos;
 
   const cls = `jl-me ${pos.source === 'gps' ? '' : 'manual'}`;
   if (!meMarker) {
@@ -90,14 +107,18 @@ function renderMe(pos) {
     meAccuracy = L.circle([pos.lat, pos.lng], { radius: 0, color: '#38bdf8', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
   } else {
     meMarker.setLatLng([pos.lat, pos.lng]);
-    meMarker.setIcon(L.divIcon({ className: '', html: `<div class="${cls}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] }));
+    // Das Symbol nur austauschen, wenn sich die Art der Position geändert hat –
+    // ein divIcon je GPS-Fix neu zu bauen ist reine Verschwendung.
+    if (quelleGewechselt) {
+      meMarker.setIcon(L.divIcon({ className: '', html: `<div class="${cls}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] }));
+    }
     meAccuracy.setLatLng([pos.lat, pos.lng]);
   }
   meAccuracy.setRadius(pos.accuracy && pos.source === 'gps' ? pos.accuracy : 0);
 
   if (follow) {
     followingProgrammatically = true;
-    map.panTo([pos.lat, pos.lng], { animate: true, duration: 0.4 });
+    map.panTo([pos.lat, pos.lng], { animate: !powerSaving(), duration: 0.4 });
     setTimeout(() => { followingProgrammatically = false; }, 500);
   }
 }
