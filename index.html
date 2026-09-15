@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Jetlag Toolkit</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="description" content="Karten-, Fragen- und Timer-Werkzeugkasten für Verstecken-und-Suchen-Spiele">
+<meta name="theme-color" content="#0b1020">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jetlag">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./assets/icons/apple-touch-icon.png">
+<link rel="icon" href="./assets/icons/favicon.png" sizes="any">
+<link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- ---------- Karte ---------- -->
+  <section class="panel" id="panel-map" data-tab="map">
+    <div id="map"></div>
+
+    <div class="map-top">
+      <button class="chip" id="btn-undo" title="Rückgängig" hidden>↶</button>
+      <div class="chip chip-stat" id="stat-remaining" hidden><b>–</b><span>Restgebiet</span></div>
+      <div class="chip chip-stat" id="stat-pos"><b id="pos-source">kein Fix</b><span id="pos-coords">–</span></div>
+    </div>
+
+    <div class="map-side">
+      <button class="fab" id="btn-follow" title="Position folgen">⌖</button>
+      <button class="fab" id="btn-freeze" title="Position einfrieren">❄</button>
+      <button class="fab" id="btn-measure" title="Messen">📏</button>
+      <button class="fab" id="btn-mask" title="Maske ein/aus">◐</button>
+      <button class="fab" id="btn-layers" title="Ebenen &amp; Gebiet">▤</button>
+    </div>
+
+    <div class="map-bottom">
+      <button class="btn btn-primary btn-wide" id="btn-ask">Frage auswerten</button>
+    </div>
+
+    <div class="measure-readout" id="measure-readout" hidden></div>
+  </section>
+
+  <!-- ---------- Fragen ---------- -->
+  <section class="panel" id="panel-questions" data-tab="questions" hidden>
+    <header class="panel-head">
+      <h1>Fragen</h1>
+      <button class="btn btn-small" id="btn-ask-2">Neue Frage</button>
+    </header>
+    <div class="panel-body" id="constraint-list"></div>
+  </section>
+
+  <!-- ---------- Timer ---------- -->
+  <section class="panel" id="panel-timers" data-tab="timers" hidden>
+    <header class="panel-head">
+      <h1>Timer</h1>
+      <button class="btn btn-small" id="btn-new-timer">Neuer Timer</button>
+    </header>
+    <div class="panel-body" id="timer-list"></div>
+  </section>
+
+  <!-- ---------- Spiel ---------- -->
+  <section class="panel" id="panel-game" data-tab="game" hidden>
+    <header class="panel-head">
+      <h1>Spiel</h1>
+      <button class="btn btn-small" id="btn-game-menu">⋯</button>
+    </header>
+    <div class="panel-body" id="game-body"></div>
+  </section>
+
+  <!-- ---------- Mehr ---------- -->
+  <section class="panel" id="panel-more" data-tab="more" hidden>
+    <header class="panel-head"><h1>Werkzeuge</h1></header>
+    <div class="panel-body" id="more-body"></div>
+  </section>
+
+  <nav class="tabbar" id="tabbar">
+    <button data-go="map" class="active"><span>🗺</span>Karte</button>
+    <button data-go="questions"><span>❓</span>Fragen<i class="badge" id="badge-questions" hidden>0</i></button>
+    <button data-go="timers"><span>⏱</span>Timer<i class="badge" id="badge-timers" hidden>0</i></button>
+    <button data-go="game"><span>🏁</span>Spiel</button>
+    <button data-go="more"><span>⋯</span>Mehr</button>
+  </nav>
+</div>
+
+<div id="sheet-root"></div>
+<div id="toast-root"></div>
+
+<script src="./vendor/leaflet/leaflet.js"></script>
+<script src="./vendor/qrcode/qrcode.js"></script>
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
