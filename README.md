@@ -60,29 +60,6 @@ Wichtig: Standort, Offline-Betrieb und Installation brauchen **HTTPS**. Über di
 veröffentlichte Adresse öffnen – eine lokal geöffnete Datei oder ein `http://`-Server
 im WLAN reicht dafür nicht.
 
-## Veröffentlichen
-
-Läuft über GitHub Pages und ist bereits eingerichtet: **jeder Push auf `main` veröffentlicht
-automatisch.** Der Workflow `.github/workflows/pages.yml` prüft vorher Syntax und Tests und
-bricht bei Fehlern ab, bevor etwas online geht.
-
-```bash
-git add -A && git commit -m "Beschreibung" && git push
-```
-
-Nach Änderungen an den App-Dateien vorher die Versionsnummer in `sw.js` (`VERSION`) erhöhen,
-sonst holen sich bereits installierte Geräte das Update erst verzögert.
-
-Deploy-Status ansehen:
-
-```bash
-gh run list --limit 5
-```
-
-Falls das Repository je neu aufgesetzt werden muss: `gh repo create <name> --public --source=.
---remote=origin --push`, danach Pages auf den Actions-Workflow stellen mit
-`gh api -X POST repos/<konto>/<name>/pages -f build_type=workflow`.
-
 ## Entwicklung
 
 ```bash
