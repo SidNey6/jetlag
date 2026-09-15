@@ -29,7 +29,7 @@ Fragekategorien mit allen zulässigen Werten. Mehr dazu weiter unten.
 |---|---|---|
 | Radius | „Bist du im Umkreis von X?" | außerhalb bzw. innerhalb des Kreises |
 | Thermometer | „Bin ich wärmer oder kälter?" | die Halbebene jenseits der Mittelsenkrechten |
-| Vergleich | „Bist du näher an X als ich?" | Kreis um X mit dem eigenen Abstand als Radius |
+| Vergleich | „Bist du näher an X als ich?" | alles außerhalb (bzw. innerhalb) eines Korridors im eigenen Abstand um X |
 | Nächster Ort | „Welchem Ort bist du am nächsten?" | die Umgebung aller anderen Orte |
 | Nächster Ort (verneint) | „Nein, mein nächstes X ist ein anderes" | genau die Umgebung des genannten Orts |
 | Gebiet | „Bist du in diesem Dorf/Bezirk?" | Innen- oder Außenfläche |
@@ -76,6 +76,28 @@ Thermometer und Radar *2 ziehen, 1 behalten*, Tentacles *4 ziehen, 2 behalten*, 
 *1 ziehen*. Welche Werte zur Auswahl stehen, hängt an der Spielgröße – bei „Klein" gibt es
 zum Beispiel keine Tentacles und nur die beiden kurzen Thermometer-Distanzen.
 
+**Bezugsobjekte holt die App selbst.** Für Vergleichsfragen musst du nirgends einen Punkt
+setzen: Du tippst das Objekt an, die App sucht das nächstgelegene Exemplar in
+OpenStreetMap und misst gegen dessen echte Geometrie. Das ist der Unterschied, der bei
+ausgedehnten Objekten zählt – eine Autobahn, eine Küste oder eine Grenze hat keinen
+sinnvollen Mittelpunkt. Gemessen wird der Abstand zum nächstgelegenen Punkt des Objekts,
+und die Grenze auf der Karte ist dann ein Korridor, kein Kreis.
+
+Zur Auswahl stehen als Linie: Autobahn, Schnellstraße, Bahnstrecke, Schnellfahrstrecke,
+Staatsgrenze, Grenzen der Verwaltungsebenen 1 und 2, Küstenlinie, Fluss. Als Fläche oder
+Punkt: Gewässer, Wald, Park, Berg, Verkehrsflughafen, Bahnhof, Museum, Kino, Krankenhaus,
+Bibliothek, Zoo, Aquarium, Freizeitpark, Golfplatz, Stadion, Gotteshaus, ausländische
+Vertretung.
+
+Dabei wird nicht nur das nächste Teilstück geladen: OpenStreetMap zerlegt lange Wege an
+jeder Kreuzung, deshalb holt die App so viel Geometrie, dass sie das ganze Spielgebiet
+plus den gemessenen Abstand abdeckt, und fügt die Stücke zu durchgehenden Linien zusammen.
+Sonst läge ein Punkt am anderen Ende des Gebiets scheinbar weit von der Autobahn weg, nur
+weil deren Teilstücke dort fehlen.
+
+Findet die Suche nichts (kein Empfang, Objekt zu weit weg), kannst du den Abstand als Zahl
+eintragen – ein Punkt ist auch dann nicht nötig.
+
 **Was beim Stellen einer Regelfrage passiert:** die Antwortfrist läuft als Timer los, die
 Frage landet mitsamt Ziehwert im Protokoll, und wo es geometrisch etwas zu holen gibt,
 öffnet sich das passende Werkzeug mit vorausgefüllten Werten – Radar wird zur
@@ -83,6 +105,13 @@ Radius-Frage, Thermometer zur Mittelsenkrechten, Measuring zum Vergleichskreis, 
 und Matching zu Voronoi-Zellen (beim Matching lädt die App die Orte der Kategorie und
 markiert deinen nächstgelegenen vorab). Matching auf Verwaltungsebenen wird zur
 Gebietsfrage. Photos erzeugen keine Geometrie und werden nur protokolliert.
+
+Autobahnen stehen nicht in der Measuring-Liste von lifack.ch. Im freien Werkzeug
+*Vergleich* gibt es sie trotzdem; als Regeloption reicht eine Zeile in der JSON-Datei:
+
+```json
+{ "label": "Autobahn", "group": "Verkehr", "sizes": ["small", "medium", "large"], "osm": "motorway" }
+```
 
 **Anpassen** unter *Mehr → Regelwerk*: Spielgröße umschalten, Regeln ansehen,
 JSON direkt bearbeiten, eigene Datei laden, exportieren, zurücksetzen. Eigene Regelwerke

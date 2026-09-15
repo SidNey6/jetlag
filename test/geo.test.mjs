@@ -68,6 +68,70 @@ test('Douglas-Peucker dünnt aus und behält die Endpunkte', () => {
   assert.deepEqual(s[s.length - 1], line[line.length - 1]);
 });
 
+test('Abstand zu Linien und Flächen statt zu Ersatzpunkten', () => {
+  // Nord-Süd-Linie auf 7,0° – ein Punkt 10 km östlich davon
+  const linie = [{ lat: 50.6, lng: 7.0 }, { lat: 50.9, lng: 7.0 }];
+  const seitlich = geo.destination({ lat: 50.75, lng: 7.0 }, 90, 10000);
+  assert.ok(Math.abs(geo.distanceToLine(seitlich, linie) - 10000) < 15);
+
+  // Jenseits des Linienendes zählt der Endpunkt, nicht die verlängerte Gerade
+  const dahinter = geo.destination({ lat: 50.9, lng: 7.0 }, 0, 5000);
+  assert.ok(Math.abs(geo.distanceToLine(dahinter, linie) - 5000) < 5);
+
+  // Fläche: innen null, außen Abstand zum Rand
+  const ring = geo.circle({ lat: 50.75, lng: 7.0 }, 3000, 64);
+  assert.equal(geo.distanceToPolygon({ lat: 50.75, lng: 7.0 }, ring), 0);
+  const aussen = geo.destination({ lat: 50.75, lng: 7.0 }, 90, 5000);
+  assert.ok(Math.abs(geo.distanceToPolygon(aussen, ring) - 2000) < 20);
+
+  // Mehrere Objekte: das nächstgelegene gewinnt
+  const features = [
+    { type: 'line', points: linie },
+    { type: 'point', points: [geo.destination(seitlich, 0, 500)] },
+  ];
+  assert.ok(Math.abs(geo.distanceToFeatures(seitlich, features) - 500) < 5);
+});
+
+test('Vergleichsfrage misst gegen eine Linie, nicht gegen einen Punkt', () => {
+  // Autobahn-artige Linie; "näher als ich" muss einen Streifen übrig lassen,
+  // keinen Kreis um irgendeinen Mittelpunkt
+  const autobahn = [{ lat: 50.70, lng: 7.00 }, { lat: 50.80, lng: 7.00 }];
+  const meinPunkt = geo.destination({ lat: 50.75, lng: 7.00 }, 90, 4000);
+  const c = {
+    type: 'compare',
+    features: [{ type: 'line', points: autobahn }],
+    myPoint: meinPunkt,
+    closer: true,
+  };
+  assert.ok(Math.abs(C.compareDistance(c) - 4000) < 20, 'eigener Abstand zur Linie');
+
+  // Punkt 1 km neben der Linie, aber weit nördlich: näher an der Linie => erlaubt,
+  // obwohl er von meinem Standort weit weg ist. Genau das kann ein Kreis nicht.
+  const nordNahAnLinie = geo.destination({ lat: 50.79, lng: 7.00 }, 90, 1000);
+  assert.equal(C.allows(c, nordNahAnLinie), true);
+  assert.ok(geo.distance(meinPunkt, nordNahAnLinie) > 4000, 'liegt außerhalb eines Kreises um mich');
+
+  // Punkt 6 km neben der Linie => weiter weg, fällt weg
+  const weit = geo.destination({ lat: 50.75, lng: 7.00 }, 90, 6000);
+  assert.equal(C.allows(c, weit), false);
+  assert.equal(C.allows({ ...c, closer: false }, weit), true);
+
+  // Zeichengeometrie ist ein Puffer, kein Kreis
+  const sh = C.shapes(c);
+  assert.equal(sh.length, 1);
+  assert.equal(sh[0].kind, 'buffer');
+  assert.equal(sh[0].exclude, 'outside');
+  assert.ok(Math.abs(sh[0].radiusM - 4000) < 20);
+  assert.equal(sh[0].features[0].type, 'line');
+});
+
+test('Vergleich mit Punktbezug bleibt ein Kreis', () => {
+  const c = { type: 'compare', ref: BERLIN, myPoint: geo.destination(BERLIN, 0, 12000), closer: true };
+  const sh = C.shapes(c);
+  assert.equal(sh[0].kind, 'ring');
+  assert.equal(sh[0].exclude, 'outside');
+});
+
 /* ---------- Fragetypen ---------- */
 
 test('Radius schließt die richtige Seite aus', () => {

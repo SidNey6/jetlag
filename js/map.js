@@ -142,7 +142,12 @@ export function render() {
       if (o.kind === 'circle') {
         L.circle(o.center, { radius: o.radius, color, weight: 1, opacity: 0.5, fill: false, interactive: false }).addTo(layers.outlines);
       } else if (o.kind === 'path') {
-        L.polyline(o.points, { color, weight: 2.5, opacity: 0.9, dashArray: '6 4', interactive: false }).addTo(layers.outlines);
+        const cls = o.closed ? L.polygon : L.polyline;
+        cls(o.points, {
+          color, weight: 2, opacity: 0.95,
+          dashArray: o.arrow ? '6 4' : null,
+          fill: false, interactive: false,
+        }).addTo(layers.outlines);
       } else if (o.kind === 'dot') {
         L.circleMarker(o.at, {
           radius: o.strong ? 6 : 4, color, weight: 2,

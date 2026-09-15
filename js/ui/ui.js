@@ -19,6 +19,16 @@ export function el(tag, props = {}, ...children) {
   return node;
 }
 
+// DOM-append fügt bei null den Text "null" ein. Dieser Helfer überspringt
+// leere Kinder, damit bedingte Zeilen (`x ? el(...) : null`) gefahrlos sind.
+export function append(node, ...children) {
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    node.append(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return node;
+}
+
 export function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
   return node;

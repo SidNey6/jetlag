@@ -79,7 +79,9 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "appType": null,
+          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
         },
         {
           "label": "Länge des Stationsnamens",
@@ -88,7 +90,9 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "appType": null,
+          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
         },
         {
           "label": "Straße oder Weg",
@@ -97,7 +101,9 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "appType": null,
+          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
         },
         {
           "label": "Verwaltungsebene 1",
@@ -150,7 +156,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "peak"
         },
         {
           "label": "Landmasse",
@@ -159,7 +166,9 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "appType": null,
+          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
         },
         {
           "label": "Park",
@@ -258,7 +267,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "consulate"
         }
       ]
     },
@@ -289,7 +299,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "highspeed"
         },
         {
           "label": "Bahnhof",
@@ -308,7 +319,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "border_country"
         },
         {
           "label": "Grenze Verwaltungsebene 1",
@@ -317,7 +329,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "border_admin1"
         },
         {
           "label": "Grenze Verwaltungsebene 2",
@@ -326,7 +339,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "border_admin2"
         },
         {
           "label": "Meereshöhe",
@@ -335,7 +349,9 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "appType": null,
+          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
         },
         {
           "label": "Gewässer",
@@ -344,7 +360,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "water"
         },
         {
           "label": "Küstenlinie",
@@ -353,7 +370,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "coastline"
         },
         {
           "label": "Berg",
@@ -362,7 +380,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "mountain"
         },
         {
           "label": "Park",
@@ -461,7 +480,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "consulate"
         }
       ]
     },
@@ -659,7 +679,9 @@
           "radiusLabel": "15 Meilen",
           "sizes": [
             "large"
-          ]
+          ],
+          "appType": null,
+          "note": "Linien statt Orte – wird nur protokolliert"
         },
         {
           "label": "Zoos",

@@ -6,8 +6,8 @@ import * as C from './constraints.js';
 import * as Loc from './location.js';
 import * as MapMod from './map.js';
 import { distance, formatDistance, bearing } from './geo.js';
-import { el, clear, openSheet, confirmSheet, toast, segmented, formatTime } from './ui/ui.js';
-import { poiSheet, areaPickerSheet, nearestPoiSheet, findPois } from './overpass.js';
+import { el, clear, append, openSheet, confirmSheet, toast, segmented, formatTime } from './ui/ui.js';
+import { poiSheet, areaPickerSheet, findPois, findNearestFeatures, REFERENCES } from './overpass.js';
 import * as Rules from './rules.js';
 import { createTimer } from './timers.js';
 import { logNote } from './rounds.js';
@@ -81,12 +81,12 @@ function openSavedPointPicker(pick) {
   ];
   openSheet('Gespeicherter Punkt', (body, close) => {
     if (!items.length) {
-      body.append(el('div', { class: 'empty', text: 'Noch keine Marker oder POIs gespeichert.' }));
+      append(body, el('div', { class: 'empty', text: 'Noch keine Marker oder POIs gespeichert.' }));
       return [];
     }
     const me = Loc.current();
     for (const it of items) {
-      body.append(el('button', {
+      append(body, el('button', {
         class: 'card', style: { textAlign: 'left' },
         onclick: () => { close(); pick(it, it.name); },
       },
@@ -115,12 +115,12 @@ export function openQuestionPicker() {
 
   openSheet('Welche Frage?', (body, close) => {
     if (rules) {
-      body.append(el('div', { class: 'hint' },
+      append(body, el('div', { class: 'hint' },
         `${rules.name}`, size ? ` · Spielgröße ${size.label}` : ''));
       for (const cat of Rules.categories()) {
         const n = Rules.optionsFor(cat.id).length;
         const minutes = Rules.answerMinutes(cat.id);
-        body.append(el('button', {
+        append(body, el('button', {
           class: 'card', style: { textAlign: 'left' },
           disabled: n === 0,
           onclick: () => { close(); openRuleOptions(cat); },
@@ -130,12 +130,12 @@ export function openQuestionPicker() {
             el('span', { class: 'card-sub', text: [Rules.drawLabel(cat), minutes ? `${minutes} Min` : null].filter(Boolean).join(' · ') })),
           el('div', { class: 'card-sub', text: n ? cat.prompt : 'In dieser Spielgröße nicht verfügbar' })));
       }
-      body.append(el('div', { class: 'hint', style: { marginTop: '10px', fontWeight: '600' }, text: 'Freie Werkzeuge' }));
+      append(body, el('div', { class: 'hint', style: { marginTop: '10px', fontWeight: '600' }, text: 'Freie Werkzeuge' }));
     }
 
     for (const [type, title, sub] of FREE_TOOLS) {
       const t = C.TYPES[type];
-      body.append(el('button', {
+      append(body, el('button', {
         class: 'card', style: { textAlign: 'left' },
         onclick: () => { close(); openQuestionForm(type); },
       },
@@ -152,19 +152,19 @@ export function openRuleOptions(cat) {
   const options = Rules.optionsFor(cat.id);
   const unit = getState().settings.unit;
   openSheet(cat.label, (body, close) => {
-    body.append(el('div', { class: 'hint', text: cat.prompt }));
+    append(body, el('div', { class: 'hint', text: cat.prompt }));
     let group = null;
     for (const o of options) {
       if (o.group && o.group !== group) {
         group = o.group;
-        body.append(el('div', { class: 'hint', style: { marginTop: '8px', fontWeight: '600' }, text: group }));
+        append(body, el('div', { class: 'hint', style: { marginTop: '8px', fontWeight: '600' }, text: group }));
       }
       const extra = [
         o.meters ? formatDistance(o.meters, unit) : null,
         o.radiusLabel && !o.meters ? o.radiusLabel : null,
         o.osm ? 'aus OpenStreetMap ladbar' : null,
       ].filter(Boolean).join(' · ');
-      body.append(el('button', {
+      append(body, el('button', {
         class: 'card', style: { textAlign: 'left' },
         onclick: () => { close(); startRuleQuestion(cat, o); },
       },
@@ -289,7 +289,7 @@ function radiusForm(body, existing, prefill) {
   });
   const df = distanceField('Radius', radius, (m) => { radius = m; },
     (prefill?.presets && prefill.presets.length) ? prefill.presets : s.presets.radius);
-  body.append(prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null, pf.node, df.node,
+  append(body, prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null, pf.node, df.node,
     el('label', { class: 'field' }, 'Antwort',
       answerSeg(['Ja – innerhalb', 'Nein – außerhalb'], inside, (v) => { inside = v; })));
 
@@ -318,7 +318,7 @@ function thermoForm(body, existing) {
   const tf = pointField('Endpunkt (jetzt)', to, (p) => { to = p; refresh(); });
   refresh();
 
-  body.append(
+  append(body, 
     el('button', {
       class: 'btn btn-small',
       onclick: () => {
@@ -345,49 +345,109 @@ function thermoForm(body, existing) {
 
 function compareForm(body, existing, prefill) {
   const s = getState();
-  let ref = existing?.ref || prefill?.at || null;
+  let refId = existing?.refId || prefill?.poiCategory || null;
+  let features = existing?.features || null;
   let refName = existing?.refName || prefill?.label || null;
+  let ref = existing?.ref || null;
   let myPoint = existing?.myPoint || Loc.current() || null;
   let closer = existing?.closer ?? true;
   let manual = existing?.myDistance ?? null;
 
-  const rf = pointField('Bezugsobjekt (z. B. Bahnhof)', ref ? { ...ref, name: refName } : null, (p) => { ref = p; refName = p?.name; refresh(); });
-  const mf = pointField('Mein Standort beim Fragen', myPoint, (p) => { myPoint = p; refresh(); });
+  const status = el('div', { class: 'card-sub' });
   const info = el('div', { class: 'hint' });
-  const manualInput = el('input', { type: 'number', step: '0.01', inputmode: 'decimal', placeholder: 'optional überschreiben' });
+  const manualInput = el('input', { type: 'number', step: '0.01', inputmode: 'decimal', placeholder: 'nur falls die Suche nichts findet' });
   manualInput.addEventListener('input', () => {
     const v = parseFloat(manualInput.value.replace(',', '.'));
     manual = isFinite(v) ? toMeters(v) : null;
     refresh();
   });
-  function refresh() {
-    const d = manual != null ? manual : (ref && myPoint ? distance(myPoint, ref) : null);
-    info.textContent = d != null ? `Mein Abstand: ${formatDistance(d, s.settings.unit)}` : 'Bezugsobjekt und Standort wählen';
-  }
-  refresh();
 
-  body.append(
+  function currentDistance() {
+    if (manual != null) return manual;
+    if (!myPoint) return null;
+    if (features && features.length) return C.refDistance({ features }, myPoint);
+    if (ref) return distance(myPoint, ref);
+    return null;
+  }
+
+  function refresh() {
+    const d = currentDistance();
+    info.textContent = d != null
+      ? `Dein Abstand: ${formatDistance(d, s.settings.unit)}`
+      : 'Bezugsobjekt wählen – die App misst den Abstand selbst.';
+  }
+
+  // Ausgedehnte Objekte wie Autobahnen oder Küsten lassen sich nicht als Punkt
+  // angeben; deshalb wird die echte Geometrie geholt und darauf gemessen.
+  async function search(id) {
+    const from = myPoint || Loc.current();
+    if (!from) { status.textContent = 'Kein Standort – trag den Abstand unten direkt ein.'; return; }
+    myPoint = from;
+    refId = id;
+    paintRefs();
+    const spec = REFERENCES.find((r) => r.id === id);
+    status.textContent = `Suche ${spec.label} …`;
+    try {
+      const res = await findNearestFeatures(from, id, { area: getState().area });
+      features = res.features;
+      ref = null;
+      refName = res.name ? `${spec.label} (${res.name})` : spec.label;
+      const arten = [...new Set(res.features.map((f) => f.type))]
+        .map((t) => ({ line: 'Linie', polygon: 'Fläche', point: 'Punkt' }[t] || t)).join('/');
+      status.textContent = `${refName} · ${formatDistance(res.distance, getState().settings.unit)} · als ${arten} gemessen`;
+      refresh();
+    } catch (e) {
+      features = null;
+      status.textContent = `${e.message || e}`;
+    }
+  }
+
+  const refRow = el('div', { class: 'pills' });
+  function paintRefs() {
+    clear(refRow);
+    for (const r of REFERENCES) {
+      refRow.append(el('button', {
+        class: `pill ${r.id === refId ? 'on' : ''}`,
+        onclick: () => search(r.id),
+      }, r.label));
+    }
+  }
+  paintRefs();
+
+  append(body, 
     prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
-    el('button', {
-      class: 'btn btn-small',
-      onclick: () => nearestPoiSheet(myPoint || Loc.current(), (poi) => rf.set(poi, poi.name), prefill?.poiCategory),
-    }, prefill?.poiCategory ? `🔎 Nächstes „${prefill.label}" suchen` : '🔎 Nächstgelegenes Objekt suchen'),
-    rf.node, mf.node,
-    el('label', { class: 'field' }, `Abstand manuell (${unitSuffix()})`, manualInput),
+    el('label', { class: 'field' }, 'Bezugsobjekt – wird automatisch gesucht', refRow),
+    status,
+    el('details', {},
+      el('summary', { class: 'hint', style: { padding: '6px 0' } }, 'Stattdessen eigenen Punkt wählen'),
+      pointField('Eigener Bezugspunkt', ref ? { ...ref, name: refName } : null, (p) => {
+        ref = p; features = null; refId = null;
+        refName = p?.name || 'eigener Punkt';
+        paintRefs();
+        status.textContent = p ? `Eigener Punkt · ${refName}` : '';
+        refresh();
+      }, { allowMe: false }).node),
+    el('label', { class: 'field' }, `Abstand selbst eintragen (${unitSuffix()})`, manualInput),
     info,
     el('label', { class: 'field' }, 'Antwort',
       answerSeg(['Näher als ich', 'Weiter als ich'], closer, (v) => { closer = v; })),
   );
 
+  refresh();
+  if (refId && !existing && !features) search(refId);
+
   return {
     collect() {
-      if (!ref) { toast('Bezugsobjekt fehlt', 'error'); return null; }
-      if (manual == null && !myPoint) { toast('Standort oder Abstand nötig', 'error'); return null; }
+      if (!features && !ref && manual == null) { toast('Bezugsobjekt wählen oder Abstand eintragen', 'error'); return null; }
+      if (currentDistance() == null) { toast('Abstand unbekannt – Standort fehlt', 'error'); return null; }
       return {
         type: 'compare',
-        ref: { lat: ref.lat, lng: ref.lng }, refName,
+        refId, refName,
+        features: features || null,
+        ref: ref ? { lat: ref.lat, lng: ref.lng } : null,
         myPoint: myPoint ? { lat: myPoint.lat, lng: myPoint.lng } : null,
-        myDistance: manual, closer,
+        myDistance: manual,
+        closer,
       };
     },
   };
@@ -401,7 +461,7 @@ function areaForm(body, existing) {
   const nameInput = el('input', { value: name, placeholder: 'z. B. Bezirk Mitte' });
   nameInput.addEventListener('input', () => { name = nameInput.value; });
 
-  body.append(
+  append(body, 
     el('button', {
       class: 'btn btn-small',
       onclick: () => areaPickerSheet(Loc.current(), (area) => {
@@ -479,7 +539,7 @@ function nearestForm(body, existing, prefill) {
   }
 
   paint();
-  body.append(
+  append(body, 
     prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
     el('button', {
       class: 'btn btn-small',
@@ -536,7 +596,7 @@ function sectorForm(body, existing, prefill) {
     onclick: () => { from = a; to = b; fromIn.value = String(a); toIn.value = String(b); },
   }, label)));
 
-  body.append(pf.node, quick,
+  append(body, pf.node, quick,
     el('div', { class: 'row' },
       el('label', { class: 'field grow' }, 'von °', fromIn),
       el('label', { class: 'field grow' }, 'bis °', toIn)),

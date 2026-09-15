@@ -108,6 +108,55 @@ export function pointInPolygon(p, ring) {
   return inside;
 }
 
+/* ---------- Abstand zu ausgedehnten Objekten ---------- */
+// Autobahnen, Küsten, Grenzen, Flüsse und Parks sind Linien und Flächen.
+// Für die gilt der Abstand zum nächstgelegenen Punkt des Objekts, nicht zu einem
+// willkürlich gesetzten Mittelpunkt. Gerechnet wird im lokalen ENU-System mit dem
+// Abfragepunkt als Ursprung – damit ist der gesuchte Abstand einfach die Länge des
+// Lotfußpunkt-Vektors.
+
+export function distanceToSegment(p, a, b) {
+  const e = enu(p);
+  const A = e.to(a), B = e.to(b);
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(A.x, A.y);
+  let t = -(A.x * dx + A.y * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(A.x + t * dx, A.y + t * dy);
+}
+
+export function distanceToLine(p, points) {
+  if (!points || !points.length) return Infinity;
+  if (points.length === 1) return distance(p, points[0]);
+  let best = Infinity;
+  for (let i = 1; i < points.length; i++) {
+    const d = distanceToSegment(p, points[i - 1], points[i]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+export function distanceToPolygon(p, ring) {
+  if (!ring || ring.length < 3) return distanceToLine(p, ring);
+  if (pointInPolygon(p, ring)) return 0;
+  return distanceToLine(p, [...ring, ring[0]]);
+}
+
+// features: [{ type: 'point' | 'line' | 'polygon', points: [{lat,lng}, ...] }]
+export function distanceToFeatures(p, features) {
+  let best = Infinity;
+  for (const f of features || []) {
+    let d;
+    if (f.type === 'polygon') d = distanceToPolygon(p, f.points);
+    else if (f.type === 'line') d = distanceToLine(p, f.points);
+    else d = distance(p, f.points[0] || f);
+    if (d < best) best = d;
+    if (best === 0) return 0;
+  }
+  return best;
+}
+
 export function boundsOf(points) {
   let s = 90, n = -90, w = 180, e = -180;
   for (const p of points) {

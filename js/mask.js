@@ -5,6 +5,8 @@
 // "außerhalb fällt weg" wird die erlaubte Fläche per destination-out ausgestanzt) und
 // wird dann auf das Sammel-Canvas kopiert. Übrig bleibt hell, was keine Frage ausschließt.
 
+import { destination } from './geo.js';
+
 const MASK_COLOR = '#0b1020';
 
 export function createMask(L, map, opts = {}) {
@@ -58,6 +60,11 @@ export function createMask(L, map, opts = {}) {
       exclude: s.exclude,
       pts: (s.ring || s.line || []).map((p) => map.project(p, zoom)),
       ref: s.excludeRef ? map.project(s.excludeRef, zoom) : null,
+      radiusM: s.radiusM,
+      features: (s.features || []).map((f) => ({
+        type: f.type,
+        pts: (f.points || []).map((p) => map.project(p, zoom)),
+      })),
       parts: (s.parts || []).map((part) => ({
         pts: part.line.map((p) => map.project(p, zoom)),
         ref: map.project(part.excludeRef, zoom),
@@ -110,6 +117,42 @@ export function createMask(L, map, opts = {}) {
     ];
   }
 
+  // Maßstab am Kartenmittelpunkt: für die Pufferbreite in Pixeln
+  function pixelsPerMeter(zoom) {
+    const c = map.getCenter();
+    const a = map.project(c, zoom);
+    const b = map.project(destination({ lat: c.lat, lng: c.lng }, 90, 1000), zoom);
+    return Math.hypot(b.x - a.x, b.y - a.y) / 1000;
+  }
+
+  // Puffer um Linien/Flächen: eine runde, dicke Linie IST der Puffer.
+  function drawBuffer(ctx, item, origin, pxPerM) {
+    const cap = Math.hypot(size.x, size.y) * 4;
+    const r = Math.min(item.radiusM * pxPerM, cap);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1, r * 2);
+    ctx.strokeStyle = ctx.fillStyle;
+    for (const f of item.features) {
+      if (!f.pts.length) continue;
+      if (f.type === 'point') {
+        const p = toScreen(f.pts[0], origin);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(1, r), 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+      ctx.beginPath();
+      f.pts.forEach((pt, i) => {
+        const p = toScreen(pt, origin);
+        if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+      });
+      if (f.type === 'polygon') { ctx.closePath(); ctx.fill(); }
+      ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+  }
+
   function fillPoly(ctx, poly) {
     ctx.beginPath();
     poly.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
@@ -133,12 +176,22 @@ export function createMask(L, map, opts = {}) {
     const sctx = scratch.getContext('2d');
 
     for (const item of projectAll()) {
-      if (!item.pts.length && !(item.parts && item.parts.length)) continue;
+      const hatGeometrie = item.pts.length || (item.parts && item.parts.length) || (item.features && item.features.length);
+      if (!hatGeometrie) continue;
       sctx.clearRect(0, 0, size.x, size.y);
       sctx.globalCompositeOperation = 'source-over';
       sctx.fillStyle = MASK_COLOR;
 
-      if (item.kind === 'cutout') {
+      if (item.kind === 'buffer') {
+        const pxPerM = pixelsPerMeter(map.getZoom());
+        if (item.exclude === 'inside') {
+          drawBuffer(sctx, item, org, pxPerM);
+        } else {
+          sctx.fillRect(0, 0, size.x, size.y);
+          sctx.globalCompositeOperation = 'destination-out';
+          drawBuffer(sctx, item, org, pxPerM);
+        }
+      } else if (item.kind === 'cutout') {
         // Schnitt der Halbebenen: alles füllen, dann jede Gegenseite ausstanzen
         sctx.fillRect(0, 0, size.x, size.y);
         sctx.globalCompositeOperation = 'destination-out';
@@ -163,7 +216,7 @@ export function createMask(L, map, opts = {}) {
       // Beim Ausstanzen keine Kanten zeichnen: die Trennlinien liefen quer über die
       // ganze Karte, während die tatsächlich ausgeschlossene Zelle winzig ist.
       // Der Helligkeitsunterschied der Maske zeigt sie beim Hineinzoomen deutlich genug.
-      if (item.kind === 'cutout') continue;
+      if (item.kind === 'cutout' || item.kind === 'buffer') continue;
 
       // Sonst Kante nachzeichnen, damit einzelne Grenzen auch in überlagerten Zonen sichtbar sind
       ectx.strokeStyle = item.area ? 'rgba(226,232,240,.85)' : (item.color || 'rgba(148,197,255,.75)');

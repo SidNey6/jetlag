@@ -13,7 +13,7 @@ import * as Rules from './rules.js';
 import { el, openSheet, promptSheet, toast } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.2.0';
+window.__JL_VERSION__ = 'v1.3.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -26,6 +26,10 @@ function showTab(name) {
   }
   document.querySelectorAll('.tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.go === name));
   update((s) => { s.ui.tab = name; });
+  // Kopfzeile mitziehen: Restgebiet und Zähler hingen sonst am letzten Ereignis fest
+  refreshStats();
+  refreshUndo();
+  refreshQuestionBadge();
   if (name === 'map') MapMod.invalidate();
   if (name === 'questions') Q.renderConstraintList();
   if (name === 'timers') Timers.renderTimers();

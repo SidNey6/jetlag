@@ -64,14 +64,59 @@ test('Größenabhängige Optionen sind richtig eingeschränkt', () => {
   }
 });
 
-test('Jede OSM-Verknüpfung zeigt auf eine bekannte Kategorie', () => {
+// Registries aus dem Quelltext lesen: POI-Kategorien (benannte Orte) und
+// Bezugsobjekte (Geometrie für Vergleichsfragen).
+function registries() {
   const src = readFileSync(join(ROOT, 'js/overpass.js'), 'utf8');
-  const known = new Set([...src.matchAll(/\{ id: '([a-z_]+)',\s+label:/g)].map((m) => m[1]));
-  assert.ok(known.size > 10, 'Kategorienliste nicht erkannt');
+  const poi = new Set([...src.matchAll(/\{ id: '([a-z_0-9]+)', *label: '[^']*', *filter:/g)].map((m) => m[1]));
+  const refs = new Set([...src.matchAll(/\{ id: '([a-z_0-9]+)', *label: '[^']*', *(?:q|from):/g)].map((m) => m[1]));
+  return { poi, refs };
+}
+
+test('Jede OSM-Verknüpfung zeigt auf eine bekannte Kategorie', () => {
+  const { poi, refs } = registries();
+  assert.ok(poi.size > 15 && refs.size > 15, 'Registries nicht erkannt');
   for (const q of data.questions) {
     for (const o of q.options) {
-      if (o.osm) assert.ok(known.has(o.osm), `${q.id}/${o.label}: unbekannte Kategorie "${o.osm}"`);
+      if (!o.osm) continue;
+      const liste = q.id === 'measuring' ? refs : poi;
+      assert.ok(liste.has(o.osm), `${q.id}/${o.label}: unbekannt "${o.osm}"`);
     }
+  }
+});
+
+// Der eigentliche Punkt: für keine Option darf die App nach einem Punkt fragen.
+// Entweder sie löst das Objekt selbst aus OpenStreetMap auf, oder die Option ist
+// ausdrücklich als "nur protokollieren" gekennzeichnet.
+test('Keine Option verlangt manuelle Eingaben', () => {
+  const { poi, refs } = registries();
+  const offen = [];
+  for (const q of data.questions) {
+    for (const o of q.options) {
+      const typ = 'appType' in o ? o.appType : q.appType;
+      if (typ === null) {
+        // Ganze Kategorien ohne Kartenbezug (Fotos) brauchen keine Einzelbegründung;
+        // eine einzelne Ausnahme innerhalb einer geometrischen Kategorie schon.
+        if (q.appType !== null) {
+          assert.ok(o.note, `${q.id}/${o.label}: Ausnahme ohne Begründung`);
+        }
+        continue;
+      }
+      // Radar und Thermometer arbeiten mit Distanzen um die eigene Position
+      if (typ === 'radius' || typ === 'thermo' || typ === 'area') continue;
+      const liste = q.id === 'measuring' ? refs : poi;
+      if (!o.osm || !liste.has(o.osm)) offen.push(`${q.id}/${o.label}`);
+    }
+  }
+  assert.deepEqual(offen, [], `Ohne automatische Auflösung: ${offen.join(', ')}`);
+});
+
+test('Ausgedehnte Bezugsobjekte sind als Linie oder Fläche hinterlegt', () => {
+  const src = readFileSync(join(ROOT, 'js/overpass.js'), 'utf8');
+  for (const id of ['motorway', 'coastline', 'border_country', 'river', 'highspeed']) {
+    const zeile = src.split('\n').find((l) => l.includes(`id: '${id}'`));
+    assert.ok(zeile, `${id} fehlt`);
+    assert.ok(zeile.includes("geom: 'line'"), `${id} müsste als Linie gemessen werden`);
   }
 });
 

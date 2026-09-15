@@ -4,7 +4,7 @@
 // Statistik und Zufallspunkte laufen über allows(), nicht über die Pixel der Maske —
 // dadurch sind sie unabhängig von Zoom und Bildausschnitt.
 
-import { distance, bearing, circle, sector, bisector, pointInPolygon, formatDistance } from './geo.js';
+import { distance, bearing, circle, sector, bisector, pointInPolygon, formatDistance, distanceToFeatures } from './geo.js';
 
 export const TYPES = {
   radius:  { label: 'Radius',        icon: '◎', color: '#38bdf8' },
@@ -31,7 +31,7 @@ export function allows(c, p) {
     }
     case 'compare': {
       const mine = compareDistance(c);
-      const theirs = distance(p, c.ref);
+      const theirs = refDistance(c, p);
       return c.closer ? theirs < mine : theirs > mine;
     }
     case 'area': {
@@ -59,8 +59,16 @@ export function allows(c, p) {
   }
 }
 
+// Abstand zum Bezugsobjekt: bei ausgedehnten Objekten (Autobahn, Küste, Grenze, Park)
+// zählt der nächstgelegene Punkt des Objekts, nicht irgendein Mittelpunkt.
+export function refDistance(c, p) {
+  if (c.features && c.features.length) return distanceToFeatures(p, c.features);
+  return c.ref ? distance(p, c.ref) : Infinity;
+}
+
 export function compareDistance(c) {
-  return c.myDistance != null ? c.myDistance : distance(c.myPoint, c.ref);
+  if (c.myDistance != null) return c.myDistance;
+  return c.myPoint ? refDistance(c, c.myPoint) : Infinity;
 }
 
 // Formen der AUSZUSCHLIESSENDEN Fläche.
@@ -72,6 +80,11 @@ export function shapes(c) {
       return [{ kind: 'ring', ring: circle(c.center, c.radius), exclude: c.inside ? 'outside' : 'inside' }];
     case 'compare': {
       const r = compareDistance(c);
+      // Um eine Linie oder Fläche herum ist die Grenze kein Kreis, sondern eine
+      // Parallelkurve im Abstand r – gezeichnet als verbreiterte Geometrie.
+      if (c.features && c.features.length) {
+        return [{ kind: 'buffer', radiusM: r, features: c.features, exclude: c.closer ? 'outside' : 'inside' }];
+      }
       return [{ kind: 'ring', ring: circle(c.ref, r), exclude: c.closer ? 'outside' : 'inside' }];
     }
     case 'thermo':
@@ -112,6 +125,11 @@ export function outline(c) {
     case 'radius':
       return [{ kind: 'circle', center: c.center, radius: c.radius }];
     case 'compare':
+      if (c.features && c.features.length) {
+        return c.features.map((f) => f.type === 'point'
+          ? { kind: 'dot', at: f.points[0] }
+          : { kind: 'path', points: f.points, closed: f.type === 'polygon' });
+      }
       return [{ kind: 'circle', center: c.ref, radius: compareDistance(c) }, { kind: 'dot', at: c.ref }];
     case 'thermo':
       return [{ kind: 'path', points: [c.from, c.to], arrow: true }, { kind: 'dot', at: c.from }, { kind: 'dot', at: c.to }];
