@@ -1,5 +1,7 @@
 # Jetlag Toolkit
 
+**Live: https://sidney6.github.io/jetlag/**
+
 Ein Werkzeugkasten für Verstecken-und-Suchen-Spiele im Jetlag-Stil, als installierbare
 Web-App (PWA). Kein Server, kein Konto, keine fest einprogrammierten Regeln – die
 Spielmechanik bringt ihr mit, die App übernimmt die Geometrie, die Zeit und das Protokoll.
@@ -58,26 +60,28 @@ Wichtig: Standort, Offline-Betrieb und Installation brauchen **HTTPS**. Über di
 veröffentlichte Adresse öffnen – eine lokal geöffnete Datei oder ein `http://`-Server
 im WLAN reicht dafür nicht.
 
-## Veröffentlichen (GitHub Pages)
+## Veröffentlichen
 
-1. Auf github.com ein leeres Repository anlegen, zum Beispiel `jetlag`.
-2. Im Projektordner:
-
-```bash
-git add -A && git commit -m "Jetlag Toolkit" && git branch -M main
-```
-
-3. Fernverbindung setzen und hochladen (eigenen Benutzernamen einsetzen):
+Läuft über GitHub Pages und ist bereits eingerichtet: **jeder Push auf `main` veröffentlicht
+automatisch.** Der Workflow `.github/workflows/pages.yml` prüft vorher Syntax und Tests und
+bricht bei Fehlern ab, bevor etwas online geht.
 
 ```bash
-git remote add origin https://github.com/DEIN-NAME/jetlag.git && git push -u origin main
+git add -A && git commit -m "Beschreibung" && git push
 ```
 
-4. Im Repository: **Settings → Pages → Source: GitHub Actions**.
+Nach Änderungen an den App-Dateien vorher die Versionsnummer in `sw.js` (`VERSION`) erhöhen,
+sonst holen sich bereits installierte Geräte das Update erst verzögert.
 
-Danach baut und veröffentlicht jeder Push automatisch
-(`.github/workflows/pages.yml` prüft vorher Syntax und Tests).
-Die Adresse lautet `https://DEIN-NAME.github.io/jetlag/`.
+Deploy-Status ansehen:
+
+```bash
+gh run list --limit 5
+```
+
+Falls das Repository je neu aufgesetzt werden muss: `gh repo create <name> --public --source=.
+--remote=origin --push`, danach Pages auf den Actions-Workflow stellen mit
+`gh api -X POST repos/<konto>/<name>/pages -f build_type=workflow`.
 
 ## Entwicklung
 
