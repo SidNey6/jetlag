@@ -89,7 +89,7 @@ Dann `http://localhost:8099` öffnen – `localhost` gilt als sicherer Kontext, 
 funktionieren dort auch Standort und Service Worker.
 
 ```bash
-node --test test/      # Geodäsie, Fragetypen, Restflächen-Schätzung, Kachelmathematik
+node --test test/*.test.mjs   # Geodäsie, Fragetypen, Restflächen-Schätzung, Kachelmathematik
 ./scripts/check.sh     # Syntaxprüfung aller Module
 node scripts/make-icons.mjs  # Icons neu erzeugen
 ```
