@@ -58,6 +58,10 @@ export function createMask(L, map, opts = {}) {
       exclude: s.exclude,
       pts: (s.ring || s.line || []).map((p) => map.project(p, zoom)),
       ref: s.excludeRef ? map.project(s.excludeRef, zoom) : null,
+      parts: (s.parts || []).map((part) => ({
+        pts: part.line.map((p) => map.project(p, zoom)),
+        ref: map.project(part.excludeRef, zoom),
+      })),
     }));
     if (areaRing) {
       // Alles AUSSERHALB des Spielgebiets fällt weg
@@ -129,12 +133,17 @@ export function createMask(L, map, opts = {}) {
     const sctx = scratch.getContext('2d');
 
     for (const item of projectAll()) {
-      if (!item.pts.length) continue;
+      if (!item.pts.length && !(item.parts && item.parts.length)) continue;
       sctx.clearRect(0, 0, size.x, size.y);
       sctx.globalCompositeOperation = 'source-over';
       sctx.fillStyle = MASK_COLOR;
 
-      if (item.kind === 'ring') {
+      if (item.kind === 'cutout') {
+        // Schnitt der Halbebenen: alles füllen, dann jede Gegenseite ausstanzen
+        sctx.fillRect(0, 0, size.x, size.y);
+        sctx.globalCompositeOperation = 'destination-out';
+        for (const part of item.parts) fillPoly(sctx, halfPlanePolygon(part.pts, part.ref, org));
+      } else if (item.kind === 'ring') {
         if (item.exclude === 'inside') {
           tracePath(sctx, item.pts, org);
           sctx.fill();
@@ -151,17 +160,24 @@ export function createMask(L, map, opts = {}) {
       mctx.globalCompositeOperation = 'source-over';
       mctx.drawImage(scratch, 0, 0, size.x, size.y);
 
-      // Kante nachzeichnen, damit einzelne Grenzen auch in überlagerten Zonen sichtbar sind
+      // Beim Ausstanzen keine Kanten zeichnen: die Trennlinien liefen quer über die
+      // ganze Karte, während die tatsächlich ausgeschlossene Zelle winzig ist.
+      // Der Helligkeitsunterschied der Maske zeigt sie beim Hineinzoomen deutlich genug.
+      if (item.kind === 'cutout') continue;
+
+      // Sonst Kante nachzeichnen, damit einzelne Grenzen auch in überlagerten Zonen sichtbar sind
       ectx.strokeStyle = item.area ? 'rgba(226,232,240,.85)' : (item.color || 'rgba(148,197,255,.75)');
       ectx.lineWidth = item.area ? 2 : 1.5;
       ectx.setLineDash(item.area ? [6, 4] : []);
-      ectx.beginPath();
-      const pts = item.kind === 'ring' ? [...item.pts, item.pts[0]] : item.pts;
-      pts.forEach((p, i) => {
-        const s = toScreen(p, org);
-        if (i) ectx.lineTo(s.x, s.y); else ectx.moveTo(s.x, s.y);
-      });
-      ectx.stroke();
+      const strokes = [item.kind === 'ring' ? [...item.pts, item.pts[0]] : item.pts];
+      for (const line of strokes) {
+        ectx.beginPath();
+        line.forEach((p, i) => {
+          const sp = toScreen(p, org);
+          if (i) ectx.lineTo(sp.x, sp.y); else ectx.moveTo(sp.x, sp.y);
+        });
+        ectx.stroke();
+      }
     }
   }
 

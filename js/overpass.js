@@ -26,6 +26,10 @@ export const CATEGORIES = [
   { id: 'library',    label: 'Bibliotheken',  filter: '["amenity"="library"]' },
   { id: 'supermarket',label: 'Supermärkte',   filter: '["shop"="supermarket"]' },
   { id: 'zoo',        label: 'Zoos',          filter: '["tourism"="zoo"]' },
+  { id: 'aquarium',   label: 'Aquarien',      filter: '["tourism"="aquarium"]' },
+  { id: 'theme_park', label: 'Freizeitparks', filter: '["tourism"="theme_park"]' },
+  { id: 'cinema',     label: 'Kinos',         filter: '["amenity"="cinema"]' },
+  { id: 'golf',       label: 'Golfplätze',    filter: '["leisure"="golf_course"]' },
   { id: 'viewpoint',  label: 'Aussichtspunkte', filter: '["tourism"="viewpoint"]' },
   { id: 'tower',      label: 'Türme',         filter: '["man_made"="tower"]' },
   { id: 'stadium',    label: 'Stadien',       filter: '["leisure"="stadium"]' },
@@ -380,36 +384,43 @@ export function poiSheet(center, onResult) {
   });
 }
 
-export function nearestPoiSheet(center, onPick) {
+export function nearestPoiSheet(center, onPick, presetCategory = null) {
   if (!center) return toast('Erst einen Standort brauchen', 'error');
   openSheet('Nächstgelegenes Objekt', (body, close) => {
     const out = el('div', {});
-    const cats = el('div', { class: 'pills' }, CATEGORIES.map((c) => el('button', {
-      class: 'pill',
-      onclick: async () => {
-        clear(out).append(busyBox(`Suche ${c.label} …`));
-        try {
-          let found = [];
-          for (const r of [800, 2000, 6000, 20000, 60000]) {
-            found = await findPois(center, c.id, r);
-            if (found.length) break;
-          }
-          clear(out);
-          if (!found.length) { out.append(el('div', { class: 'empty', text: 'Nichts gefunden.' })); return; }
-          for (const p of found.slice(0, 15)) {
-            out.append(el('button', {
-              class: 'card', style: { textAlign: 'left' },
-              onclick: () => { close(); onPick(p); },
-            },
-              el('div', { class: 'card-title', text: p.name }),
-              el('div', { class: 'card-sub', text: formatDistance(p.distance, getState().settings.unit) })));
-          }
-        } catch (e) {
-          clear(out).append(netErrorBox(e));
+    const search = async (c) => {
+      clear(out).append(busyBox(`Suche ${c.label} …`));
+      try {
+        let found = [];
+        for (const r of [800, 2000, 6000, 20000, 60000]) {
+          found = await findPois(center, c.id, r);
+          if (found.length) break;
         }
-      },
+        clear(out);
+        if (!found.length) { out.append(el('div', { class: 'empty', text: 'Nichts gefunden.' })); return; }
+        for (const p of found.slice(0, 15)) {
+          out.append(el('button', {
+            class: 'card', style: { textAlign: 'left' },
+            onclick: () => { close(); onPick(p); },
+          },
+            el('div', { class: 'card-title', text: p.name }),
+            el('div', { class: 'card-sub', text: formatDistance(p.distance, getState().settings.unit) })));
+        }
+      } catch (e) {
+        clear(out).append(netErrorBox(e));
+      }
+    };
+
+    const cats = el('div', { class: 'pills' }, CATEGORIES.map((c) => el('button', {
+      class: `pill ${c.id === presetCategory ? 'on' : ''}`,
+      onclick: () => search(c),
     }, c.label)));
     body.append(el('label', { class: 'field' }, 'Kategorie wählen', cats), out);
+
+    // Kommt der Aufruf aus einer Regelfrage, ist die Kategorie schon bekannt
+    const preset = CATEGORIES.find((c) => c.id === presetCategory);
+    if (preset) search(preset);
+
     return [el('button', { class: 'btn grow', onclick: () => close() }, 'Schließen')];
   });
 }

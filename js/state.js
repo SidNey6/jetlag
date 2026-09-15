@@ -15,7 +15,11 @@ export function emptyState() {
       radiusRings: [500, 1000, 2000],
       overpassTimeout: 25,
     },
+    // null = mitgeliefertes Regelwerk (rules/lifack.json); sonst eigenes
+    rules: null,
+    gameSize: 'medium',
     area: null,
+    hidingZone: null,
     constraints: [],
     markers: [],
     pois: [],
@@ -102,9 +106,11 @@ export function save() {
     if (!quotaWarned) {
       quotaWarned = true;
       console.warn('Zustand konnte nicht gespeichert werden', e);
-      document.dispatchEvent(new CustomEvent('jetlag:toast', {
-        detail: { text: 'Speicher voll – Zustand wird nicht gesichert', kind: 'error' },
-      }));
+      if (typeof document !== 'undefined') {
+        document.dispatchEvent(new CustomEvent('jetlag:toast', {
+          detail: { text: 'Speicher voll – Zustand wird nicht gesichert', kind: 'error' },
+        }));
+      }
     }
   }
 }

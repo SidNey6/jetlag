@@ -42,7 +42,9 @@ export function allows(c, p) {
       const chosen = c.pois.find((x) => x.id === c.chosenId);
       if (!chosen) return true;
       const d = distance(p, chosen);
-      return c.pois.every((o) => o.id === c.chosenId || distance(p, o) >= d);
+      const isNearest = c.pois.every((o) => o.id === c.chosenId || distance(p, o) >= d);
+      // invert: "nein, mein nächstes X ist ein anderes" – dann fällt genau diese Zelle weg
+      return c.invert ? !isNearest : isNearest;
     }
     case 'sector': {
       if (c.radius && distance(p, c.center) > c.radius) return !c.inside;
@@ -83,13 +85,17 @@ export function shapes(c) {
     case 'nearest': {
       const chosen = c.pois.find((x) => x.id === c.chosenId);
       if (!chosen) return [];
-      return c.pois
+      const parts = c.pois
         .filter((o) => o.id !== c.chosenId)
         .map((o) => ({
-          kind: 'halfplane',
           line: bisector(chosen, o, BISECTOR_HALF_LENGTH, BISECTOR_SAMPLES),
           excludeRef: o,
         }));
+      // Normalfall: die Umgebung jedes anderen Ortes fällt weg – eine Vereinigung.
+      // Umgekehrt fällt nur die Zelle des genannten Ortes weg; das ist ein Schnitt
+      // von Halbebenen und wird als "alles füllen, Gegenseiten ausstanzen" gezeichnet.
+      if (!c.invert) return parts.map((p) => ({ kind: 'halfplane', ...p }));
+      return parts.length ? [{ kind: 'cutout', parts }] : [];
     }
     case 'sector': {
       const r = c.radius || 200000;
@@ -131,7 +137,10 @@ export function describe(c, unit = 'metric') {
       return `${c.inside ? 'In' : 'Nicht in'} ${c.name || 'Gebiet'}`;
     case 'nearest': {
       const chosen = c.pois.find((x) => x.id === c.chosenId);
-      return `Am nächsten an ${chosen ? chosen.name : '?'} (von ${c.pois.length})`;
+      const name = chosen ? chosen.name : '?';
+      return c.invert
+        ? `Nicht am nächsten an ${name} (von ${c.pois.length})`
+        : `Am nächsten an ${name} (von ${c.pois.length})`;
     }
     case 'sector':
       return `${c.inside ? 'Richtung' : 'Nicht Richtung'} ${Math.round(c.from)}°–${Math.round(c.to)}°`;

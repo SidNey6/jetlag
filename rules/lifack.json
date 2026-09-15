@@ -1,0 +1,999 @@
+{
+  "id": "lifack-hide-and-seek",
+  "name": "Hide and Seek (lifack.ch)",
+  "version": "2026-09-15",
+  "source": "https://www.lifack.ch/docs/quick_start_guide/",
+  "sourceNote": "Werte übernommen von lifack.ch, einer inoffiziellen Fan-Umsetzung von Jet Lag: Hide and Seek. Nicht mit Jet Lag, Nebula oder Wendover Productions verbunden. Originalmaße sind Meilen; hier in Metern hinterlegt, damit die App rechnen kann.",
+  "unitsOfOrigin": "imperial",
+  "gameSizes": [
+    {
+      "id": "small",
+      "label": "Klein",
+      "description": "Eine Kleinstadt oder ein Teil einer Großstadt",
+      "typicalDuration": "4–8 Stunden",
+      "hidingPeriodMinutes": 30,
+      "hidingZoneRadiusM": 402.336,
+      "hidingZoneLabel": "¼ Meile",
+      "answerMinutes": 5,
+      "photoMinutes": 10
+    },
+    {
+      "id": "medium",
+      "label": "Mittel",
+      "description": "Eine Großstadt, ein Ballungsraum oder eine Region",
+      "typicalDuration": "etwa 1 Tag",
+      "hidingPeriodMinutes": 60,
+      "hidingZoneRadiusM": 402.336,
+      "hidingZoneLabel": "¼ Meile",
+      "answerMinutes": 5,
+      "photoMinutes": 10
+    },
+    {
+      "id": "large",
+      "label": "Groß",
+      "description": "Eine große Region, ein ganzes Land oder mehrere kleine Länder",
+      "typicalDuration": "2–4 Tage",
+      "hidingPeriodMinutes": 180,
+      "hidingZoneRadiusM": 804.672,
+      "hidingZoneLabel": "½ Meile",
+      "answerMinutes": 5,
+      "photoMinutes": 20
+    }
+  ],
+  "round": {
+    "handLimit": 6,
+    "foundWithinM": 1.524,
+    "foundLabel": "5 Fuß, und der Versteckende muss gesehen worden sein",
+    "roundChangeMinutes": 10,
+    "scoring": "longestSingleRound",
+    "scoringLabel": "Es gewinnt die längste einzelne Versteckrunde, nicht die Summe",
+    "repeatQuestionCostMultiplies": true,
+    "repeatQuestionNote": "Eine schon gestellte Frage kostet beim zweiten Mal doppelt, beim dritten dreifach usw. Die Züge werden einzeln ausgeführt, nicht zusammengelegt.",
+    "streetViewForbidden": true
+  },
+  "questions": [
+    {
+      "id": "matching",
+      "order": 1,
+      "label": "Matching",
+      "prompt": "Ist dein nächstgelegenes … dasselbe wie meines?",
+      "draw": 3,
+      "pick": 1,
+      "minutes": 5,
+      "appType": "nearest",
+      "options": [
+        {
+          "label": "Verkehrsflughafen",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "airport"
+        },
+        {
+          "label": "Verkehrslinie",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Länge des Stationsnamens",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Straße oder Weg",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Verwaltungsebene 1",
+          "group": "Verwaltung",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "appType": "area",
+          "adminLevel": 4
+        },
+        {
+          "label": "Verwaltungsebene 2",
+          "group": "Verwaltung",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "appType": "area",
+          "adminLevel": 6
+        },
+        {
+          "label": "Verwaltungsebene 3",
+          "group": "Verwaltung",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "appType": "area",
+          "adminLevel": 8
+        },
+        {
+          "label": "Verwaltungsebene 4",
+          "group": "Verwaltung",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "appType": "area",
+          "adminLevel": 9
+        },
+        {
+          "label": "Berg",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Landmasse",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Park",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "park"
+        },
+        {
+          "label": "Freizeitpark",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "theme_park"
+        },
+        {
+          "label": "Zoo",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "zoo"
+        },
+        {
+          "label": "Aquarium",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "aquarium"
+        },
+        {
+          "label": "Golfplatz",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "golf"
+        },
+        {
+          "label": "Museum",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "museum"
+        },
+        {
+          "label": "Kino",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "cinema"
+        },
+        {
+          "label": "Krankenhaus",
+          "group": "Öffentliches",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "hospital"
+        },
+        {
+          "label": "Bibliothek",
+          "group": "Öffentliches",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "library"
+        },
+        {
+          "label": "Ausländisches Konsulat",
+          "group": "Öffentliches",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "measuring",
+      "order": 2,
+      "label": "Measuring",
+      "prompt": "Bist du im Vergleich zu mir näher an … oder weiter davon entfernt?",
+      "draw": 3,
+      "pick": 1,
+      "minutes": 5,
+      "appType": "compare",
+      "options": [
+        {
+          "label": "Verkehrsflughafen",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "airport"
+        },
+        {
+          "label": "Schnellfahrstrecke",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Bahnhof",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "station"
+        },
+        {
+          "label": "Staatsgrenze",
+          "group": "Grenzen",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Grenze Verwaltungsebene 1",
+          "group": "Grenzen",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Grenze Verwaltungsebene 2",
+          "group": "Grenzen",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Meereshöhe",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Gewässer",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Küstenlinie",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Berg",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Park",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "park"
+        },
+        {
+          "label": "Freizeitpark",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "theme_park"
+        },
+        {
+          "label": "Zoo",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "zoo"
+        },
+        {
+          "label": "Aquarium",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "aquarium"
+        },
+        {
+          "label": "Golfplatz",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "golf"
+        },
+        {
+          "label": "Museum",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "museum"
+        },
+        {
+          "label": "Kino",
+          "group": "Sehenswertes",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "cinema"
+        },
+        {
+          "label": "Krankenhaus",
+          "group": "Öffentliches",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "hospital"
+        },
+        {
+          "label": "Bibliothek",
+          "group": "Öffentliches",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "library"
+        },
+        {
+          "label": "Ausländisches Konsulat",
+          "group": "Öffentliches",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "thermometer",
+      "order": 3,
+      "label": "Thermometer",
+      "prompt": "Ich bin (mindestens) … gefahren. Bin ich wärmer oder kälter?",
+      "draw": 2,
+      "pick": 1,
+      "minutes": 5,
+      "appType": "thermo",
+      "options": [
+        {
+          "label": "½ Meile",
+          "meters": 804.672,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "3 Meilen",
+          "meters": 4828.032,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "10 Meilen",
+          "meters": 16093.44,
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "50 Meilen",
+          "meters": 80467.2,
+          "sizes": [
+            "large"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "radar",
+      "order": 4,
+      "label": "Radar",
+      "prompt": "Bist du im Umkreis von … um mich?",
+      "draw": 2,
+      "pick": 1,
+      "minutes": 5,
+      "appType": "radius",
+      "options": [
+        {
+          "label": "¼ Meile",
+          "meters": 402.336,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "½ Meile",
+          "meters": 804.672,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "1 Meile",
+          "meters": 1609.344,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "3 Meilen",
+          "meters": 4828.032,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "5 Meilen",
+          "meters": 8046.72,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "10 Meilen",
+          "meters": 16093.44,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "25 Meilen",
+          "meters": 40233.6,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "50 Meilen",
+          "meters": 80467.2,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "100 Meilen",
+          "meters": 160934.4,
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tentacles",
+      "order": 5,
+      "label": "Tentacles",
+      "prompt": "Welchem … im Umkreis von … um mich bist du am nächsten? (Du musst ebenfalls innerhalb liegen.)",
+      "draw": 4,
+      "pick": 2,
+      "minutes": 5,
+      "appType": "nearest",
+      "options": [
+        {
+          "label": "Museen",
+          "meters": 1609.344,
+          "radiusLabel": "1 Meile",
+          "sizes": [
+            "medium",
+            "large"
+          ],
+          "osm": "museum"
+        },
+        {
+          "label": "Bibliotheken",
+          "meters": 1609.344,
+          "radiusLabel": "1 Meile",
+          "sizes": [
+            "medium",
+            "large"
+          ],
+          "osm": "library"
+        },
+        {
+          "label": "Kinos",
+          "meters": 1609.344,
+          "radiusLabel": "1 Meile",
+          "sizes": [
+            "medium",
+            "large"
+          ],
+          "osm": "cinema"
+        },
+        {
+          "label": "Krankenhäuser",
+          "meters": 1609.344,
+          "radiusLabel": "1 Meile",
+          "sizes": [
+            "medium",
+            "large"
+          ],
+          "osm": "hospital"
+        },
+        {
+          "label": "Metrolinien",
+          "meters": 24140.16,
+          "radiusLabel": "15 Meilen",
+          "sizes": [
+            "large"
+          ]
+        },
+        {
+          "label": "Zoos",
+          "meters": 24140.16,
+          "radiusLabel": "15 Meilen",
+          "sizes": [
+            "large"
+          ],
+          "osm": "zoo"
+        },
+        {
+          "label": "Aquarien",
+          "meters": 24140.16,
+          "radiusLabel": "15 Meilen",
+          "sizes": [
+            "large"
+          ],
+          "osm": "aquarium"
+        },
+        {
+          "label": "Freizeitparks",
+          "meters": 24140.16,
+          "radiusLabel": "15 Meilen",
+          "sizes": [
+            "large"
+          ],
+          "osm": "theme_park"
+        }
+      ]
+    },
+    {
+      "id": "photos",
+      "order": 6,
+      "label": "Photos",
+      "prompt": "Schick ein Foto von …",
+      "draw": 1,
+      "pick": 1,
+      "minutesBySize": {
+        "small": 10,
+        "medium": 10,
+        "large": 20
+      },
+      "appType": null,
+      "options": [
+        {
+          "label": "Ein Baum",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Der Himmel",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Du selbst",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Breiteste Straße",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Höchstes Bauwerk in Sichtweite",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Irgendein von der Station sichtbares Gebäude",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Höchstes von der Station sichtbares Gebäude",
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Nächstgelegene Straße nachzeichnen",
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Zwei Gebäude",
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Restaurantinneres",
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Bahnsteig",
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Park",
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Supermarktgang",
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "Gotteshaus",
+          "sizes": [
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "label": "½ Meile Straßenverlauf nachgezeichnet",
+          "sizes": [
+            "large"
+          ]
+        },
+        {
+          "label": "Höchster von der Station sichtbarer Berg",
+          "sizes": [
+            "large"
+          ]
+        },
+        {
+          "label": "Größtes Gewässer in deiner Zone",
+          "sizes": [
+            "large"
+          ]
+        },
+        {
+          "label": "Fünf Gebäude",
+          "sizes": [
+            "large"
+          ]
+        }
+      ]
+    }
+  ],
+  "deck": {
+    "note": "Kartenmengen von der Kartenübersicht auf lifack.ch. Bei den Flüchen ist dort keine Stückzahl angegeben – hier als je 1 geführt, was zur Gesamtzahl passt. Die Zeitboni skalieren laut Quelle mit der Spielgröße; die Skalierungswerte sind dort nur als Kartenbild veröffentlicht, deshalb hier ohne Faktor.",
+    "blanks": 25,
+    "timeBonuses": [
+      {
+        "minutes": 5,
+        "count": 25
+      },
+      {
+        "minutes": 10,
+        "count": 15
+      },
+      {
+        "minutes": 15,
+        "count": 10
+      },
+      {
+        "minutes": 20,
+        "count": 3
+      },
+      {
+        "minutes": 30,
+        "count": 2
+      }
+    ],
+    "powerups": [
+      {
+        "label": "Veto",
+        "count": 4,
+        "effect": "Frage nicht beantworten; sie zählt trotzdem als gestellt"
+      },
+      {
+        "label": "Randomisieren",
+        "count": 4,
+        "effect": "Stattdessen eine zufällige andere, noch nicht gestellte Frage derselben Kategorie beantworten"
+      },
+      {
+        "label": "1 ablegen, 2 ziehen",
+        "count": 4,
+        "effect": "Eine Karte gegen zwei neue tauschen"
+      },
+      {
+        "label": "2 ablegen, 3 ziehen",
+        "count": 4,
+        "effect": "Zwei Karten gegen drei neue tauschen"
+      },
+      {
+        "label": "1 ziehen, Handlimit +1",
+        "count": 2,
+        "effect": "Eine Karte ziehen und das Handlimit für die Runde um eins erhöhen"
+      },
+      {
+        "label": "Duplizieren",
+        "count": 2,
+        "effect": "Als exakte Kopie einer anderen Karte auf der Hand spielen"
+      },
+      {
+        "label": "Umziehen",
+        "count": 1,
+        "effect": "Neue Versteckzone beziehen, Uhr pausiert; kostet die ganze Hand und verrät die bisherige Station"
+      }
+    ],
+    "curses": [
+      {
+        "label": "Fluch des Luxusautos",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Brückentrolls",
+        "count": 1
+      },
+      {
+        "label": "Fluch des ausgelaugten Hirns",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Wasserballasts",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Zoologen",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Eierpartners",
+        "count": 1
+      },
+      {
+        "label": "Fluch der klemmenden Tür",
+        "count": 1
+      },
+      {
+        "label": "Fluch des löchrigen Gedächtnisses",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Vogelführers",
+        "count": 1
+      },
+      {
+        "label": "Fluch des ahnungslosen Touristen",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Erpresserbriefs",
+        "count": 1
+      },
+      {
+        "label": "Fluch des mittelmäßigen Reisebüros",
+        "count": 1
+      },
+      {
+        "label": "Fluch des beeinflussbaren Konsumenten",
+        "count": 1
+      },
+      {
+        "label": "Fluch der Kehrtwende",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Steinmanns",
+        "count": 1
+      },
+      {
+        "label": "Fluch der fernen Küche",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Zitronenphylakteriums",
+        "count": 1
+      },
+      {
+        "label": "Fluch der Spielerfüße",
+        "count": 1
+      },
+      {
+        "label": "Fluch des verborgenen Galgenmännchens",
+        "count": 1
+      },
+      {
+        "label": "Fluch des endlosen Taumels",
+        "count": 1
+      },
+      {
+        "label": "Fluch der Rechtskurve",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Stadterkunders",
+        "count": 1
+      },
+      {
+        "label": "Fluch des überlaufenden Kelchs",
+        "count": 1
+      },
+      {
+        "label": "Fluch des Labyrinths",
+        "count": 1
+      }
+    ]
+  }
+}

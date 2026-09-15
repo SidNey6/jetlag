@@ -1,6 +1,6 @@
 // "Mehr": Spielgebiet, Werkzeuge, Offline-Karten, Teilen, Einstellungen.
 
-import { getState, update, replaceState, emptyState } from './state.js';
+import { getState, update, replaceState, emptyState, uid } from './state.js';
 import * as C from './constraints.js';
 import * as Loc from './location.js';
 import * as MapMod from './map.js';
@@ -12,12 +12,17 @@ import { openDiceSheet, openListsSheet } from './random.js';
 import { openShareSheet, openImportSheet } from './share.js';
 import { tileCacheCard } from './tiles.js';
 import { exportText } from './rounds.js';
+import * as Rules from './rules.js';
+import { createTimer } from './timers.js';
 
 export function render() {
   const host = document.getElementById('more-body');
   if (!host || document.getElementById('panel-more').hidden) return;
   const s = getState();
   clear(host);
+
+  /* Regelwerk */
+  host.append(rulesCard());
 
   /* Spielgebiet */
   host.append(el('div', { class: 'card' },
@@ -330,4 +335,178 @@ async function editDistanceList(title, current, hint, save) {
   save(list);
   render();
   toast(`${list.length} Werte gespeichert`, 'ok');
+}
+
+/* ---------- Regelwerk ---------- */
+
+function rulesCard() {
+  const rules = Rules.getRules();
+  if (!rules) {
+    return el('div', { class: 'card' },
+      el('div', { class: 'card-title', text: 'Regelwerk' }),
+      el('div', { class: 'card-sub', text: 'Wird geladen …' }));
+  }
+  const size = Rules.currentSize();
+  const unit = getState().settings.unit;
+
+  return el('div', { class: 'card' },
+    el('div', { class: 'card-title' },
+      el('span', { class: 'grow', text: 'Regelwerk' }),
+      el('span', { class: 'card-sub', text: Rules.isCustom() ? 'eigenes' : 'Standard' })),
+    el('div', { class: 'card-sub', text: `${rules.name}${rules.version ? ` · ${rules.version}` : ''}` }),
+
+    el('label', { class: 'field' }, 'Spielgröße',
+      el('div', { class: 'seg' }, Rules.sizes().map((g) => el('button', {
+        class: g.id === (size && size.id) ? 'on' : '',
+        onclick: () => { Rules.setSize(g.id); render(); MapMod.render(); },
+      }, g.label)))),
+
+    size ? el('div', { class: 'card-sub' },
+      `${size.description} · ${size.typicalDuration || ''}`) : null,
+    size ? el('table', { class: 'scores' },
+      el('tr', {}, el('td', { text: 'Versteckzeit' }), el('td', { class: 'num mono', text: `${size.hidingPeriodMinutes} Min` })),
+      el('tr', {}, el('td', { text: 'Versteckzone' }), el('td', { class: 'num mono', text: formatDistance(size.hidingZoneRadiusM, unit) })),
+      el('tr', {}, el('td', { text: 'Antwortfrist' }), el('td', { class: 'num mono', text: `${size.answerMinutes} Min` })),
+      el('tr', {}, el('td', { text: 'Fotofrist' }), el('td', { class: 'num mono', text: `${size.photoMinutes || size.answerMinutes} Min` }))) : null,
+
+    el('div', { class: 'row row-wrap' },
+      el('button', { class: 'btn btn-small', onclick: openRulesOverview }, '📖 Regeln ansehen'),
+      el('button', {
+        class: 'btn btn-small',
+        onclick: () => {
+          const m = Rules.hidingPeriodMinutes();
+          createTimer({ name: 'Versteckzeit', kind: 'countdown', duration: m * 60000 });
+          toast(`Versteckzeit läuft: ${m} Minuten`, 'ok');
+          document.querySelector('.tabbar [data-go="timers"]').click();
+        },
+      }, '⏱ Versteckzeit starten'),
+      el('button', { class: 'btn btn-small', onclick: seedDeckLists }, '🎴 Deck als Listen'),
+    ),
+    el('div', { class: 'row row-wrap' },
+      el('button', { class: 'btn btn-small', onclick: openRulesEditor }, '✏️ JSON bearbeiten'),
+      el('button', { class: 'btn btn-small', onclick: importRulesFile }, '📥 Datei laden'),
+      el('button', { class: 'btn btn-small', onclick: exportRules }, '💾 Export'),
+      Rules.isCustom() ? el('button', {
+        class: 'btn btn-small btn-danger',
+        onclick: async () => {
+          if (!(await confirmSheet('Regelwerk zurücksetzen?', 'Zurück auf den mitgelieferten Standard von lifack.ch.', { danger: true, okLabel: 'Zurücksetzen' }))) return;
+          await Rules.resetRules();
+          render();
+          toast('Standard wiederhergestellt', 'ok');
+        },
+      }, 'Zurücksetzen') : null,
+    ),
+    el('div', { class: 'hint', text: rules.sourceNote || '' }),
+  );
+}
+
+function openRulesOverview() {
+  const rules = Rules.getRules();
+  const size = Rules.currentSize();
+  const unit = getState().settings.unit;
+  openSheet('Regeln', (body, close) => {
+    body.append(el('div', { class: 'hint', text: `Gefiltert auf Spielgröße ${size ? size.label : '–'}.` }));
+    for (const cat of Rules.categories()) {
+      const opts = Rules.optionsFor(cat.id);
+      body.append(el('div', { class: 'card' },
+        el('div', { class: 'card-title' },
+          el('span', { class: 'grow', text: cat.label }),
+          el('span', { class: 'card-sub', text: `${Rules.drawLabel(cat)} · ${Rules.answerMinutes(cat.id)} Min` })),
+        el('div', { class: 'card-sub', text: cat.prompt }),
+        el('div', { class: 'hint', text: opts.length
+          ? opts.map((o) => o.meters ? `${o.label} (${formatDistance(o.meters, unit)})` : o.label).join(' · ')
+          : 'In dieser Spielgröße nicht verfügbar' })));
+    }
+    const r = rules.round || {};
+    body.append(el('div', { class: 'card' },
+      el('div', { class: 'card-title', text: 'Runde' }),
+      el('div', { class: 'card-sub', text: [
+        r.handLimit ? `Handlimit ${r.handLimit} Karten` : null,
+        r.foundLabel ? `Gefunden: ${r.foundLabel}` : null,
+        r.roundChangeMinutes ? `Rundenwechsel: ${r.roundChangeMinutes} Min Vorlauf` : null,
+        r.scoringLabel,
+        r.repeatQuestionNote,
+      ].filter(Boolean).join('\n') })));
+    const d = rules.deck;
+    if (d) {
+      const sum = (a) => (a || []).reduce((s2, c) => s2 + (c.count || 0), 0);
+      body.append(el('div', { class: 'card' },
+        el('div', { class: 'card-title', text: 'Deck' }),
+        el('div', { class: 'card-sub', text: `${sum(d.timeBonuses)} Zeitboni · ${sum(d.powerups)} Powerups · ${sum(d.curses)} Flüche · ${d.blanks || 0} Blanks` })));
+    }
+    if (rules.source) body.append(el('div', { class: 'hint', text: `Quelle: ${rules.source}` }));
+    return [el('button', { class: 'btn grow', onclick: () => close() }, 'Schließen')];
+  });
+}
+
+function openRulesEditor() {
+  const current = JSON.stringify(Rules.getRules(), null, 2);
+  openSheet('Regelwerk bearbeiten', (body, close) => {
+    const area = el('textarea', { style: { minHeight: '46vh', fontFamily: 'ui-monospace, monospace', fontSize: '12px' } });
+    area.value = current;
+    const status = el('div', { class: 'hint', text: 'Änderungen wirken sofort, sobald sie gültig sind.' });
+    body.append(status, area);
+    return [
+      el('button', { class: 'btn grow', onclick: () => close() }, 'Abbrechen'),
+      el('button', {
+        class: 'btn grow btn-primary',
+        onclick: () => {
+          let parsed;
+          try { parsed = JSON.parse(area.value); }
+          catch (e) { status.textContent = `JSON-Fehler: ${e.message}`; status.style.color = 'var(--danger)'; return; }
+          try { Rules.applyRules(parsed); }
+          catch (e) { status.textContent = `Regelfehler: ${e.message}`; status.style.color = 'var(--danger)'; return; }
+          close();
+          render();
+          toast('Regelwerk übernommen', 'ok');
+        },
+      }, 'Übernehmen'),
+    ];
+  });
+}
+
+function importRulesFile() {
+  const input = el('input', { type: 'file', accept: 'application/json,.json' });
+  input.addEventListener('change', async () => {
+    const f = input.files[0];
+    if (!f) return;
+    try {
+      Rules.applyRules(JSON.parse(await f.text()), f.name);
+      render();
+      toast(`${f.name} übernommen`, 'ok');
+    } catch (e) {
+      toast(`Nicht übernommen: ${e.message || e}`, 'error');
+    }
+  });
+  input.click();
+}
+
+function exportRules() {
+  const blob = new Blob([JSON.stringify(Rules.getRules(), null, 2)], { type: 'application/json' });
+  const a = el('a', { href: URL.createObjectURL(blob), download: 'jetlag-regeln.json' });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+// Deck des Regelwerks in die vorhandene Listenfunktion überführen, damit man
+// mit „Ziehen" wirklich nach Kartenhäufigkeit zieht.
+function seedDeckLists() {
+  const d = Rules.getRules()?.deck;
+  if (!d) return toast('Kein Deck im Regelwerk', 'error');
+  const expand = (arr, label) => arr.flatMap((c) => Array.from({ length: c.count || 1 }, () => label(c)));
+  const neu = [
+    { name: 'Zeitboni', items: expand(d.timeBonuses || [], (c) => `+${c.minutes} Minuten`) },
+    { name: 'Powerups', items: expand(d.powerups || [], (c) => c.effect ? `${c.label} – ${c.effect}` : c.label) },
+    { name: 'Flüche', items: expand(d.curses || [], (c) => c.label) },
+  ].filter((l) => l.items.length);
+
+  update((s) => {
+    for (const l of neu) {
+      const vorhanden = s.lists.find((x) => x.name === l.name);
+      if (vorhanden) { vorhanden.items = l.items; vorhanden.drawn = []; }
+      else s.lists.push({ id: uid('ls'), name: l.name, items: l.items, drawn: [] });
+    }
+  }, 'Deck-Listen angelegt');
+  toast(`${neu.map((l) => `${l.name} (${l.items.length})`).join(', ')}`, 'ok');
 }

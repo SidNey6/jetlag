@@ -110,6 +110,44 @@ test('Nächster Ort lässt nur die Zelle des genannten Ortes übrig', () => {
   assert.equal(C.allows(c, { lat: 52.5, lng: 13.79 }), false);
 });
 
+test('Verneintes Matching schließt genau die Zelle des genannten Ortes aus', () => {
+  const pois = [
+    { id: 'a', lat: 52.5, lng: 13.0, name: 'A' },
+    { id: 'b', lat: 52.5, lng: 13.4, name: 'B' },
+    { id: 'c', lat: 52.5, lng: 13.8, name: 'C' },
+  ];
+  const ja = { type: 'nearest', pois, chosenId: 'b' };
+  const nein = { type: 'nearest', pois, chosenId: 'b', invert: true };
+  const inB = { lat: 52.5, lng: 13.41 }, inA = { lat: 52.5, lng: 13.05 };
+  assert.equal(C.allows(nein, inB), false, 'Zelle von B muss wegfallen');
+  assert.equal(C.allows(nein, inA), true, 'außerhalb bleibt erlaubt');
+  // Ja und Nein müssen einander exakt ergänzen
+  for (const lng of [12.9, 13.1, 13.2, 13.39, 13.41, 13.6, 13.9]) {
+    const p = { lat: 52.5, lng };
+    assert.equal(C.allows(ja, p), !C.allows(nein, p), `bei lng ${lng}`);
+  }
+  // Zeichengeometrie: ein einzelner Ausstanz-Block statt einer Vereinigung
+  const sh = C.shapes(nein);
+  assert.equal(sh.length, 1);
+  assert.equal(sh[0].kind, 'cutout');
+  assert.equal(sh[0].parts.length, 2);
+  assert.ok(sh[0].parts.every((p) => p.line.length >= 3 && p.excludeRef));
+  assert.ok(C.describe(nein).startsWith('Nicht am nächsten'));
+});
+
+test('Restfläche von Ja und Nein ergibt zusammen das ganze Gebiet', () => {
+  const pois = [
+    { id: 'a', lat: 52.50, lng: 13.30, name: 'A' },
+    { id: 'b', lat: 52.52, lng: 13.40, name: 'B' },
+    { id: 'c', lat: 52.48, lng: 13.50, name: 'C' },
+  ];
+  const area = { type: 'circle', center: { lat: 52.5, lng: 13.4 }, radius: 12000 };
+  const ja = C.remainingStats(area, [{ type: 'nearest', pois, chosenId: 'b' }], 20000);
+  const nein = C.remainingStats(area, [{ type: 'nearest', pois, chosenId: 'b', invert: true }], 20000);
+  assert.ok(Math.abs(ja.fraction + nein.fraction - 1) < 0.02,
+    `Summe war ${(ja.fraction + nein.fraction).toFixed(3)}`);
+});
+
 test('Richtungsfrage prüft den Sektor auch über 0° hinweg', () => {
   const c = { type: 'sector', center: BERLIN, from: 315, to: 45, inside: true };
   assert.equal(C.allows(c, geo.destination(BERLIN, 0, 5000)), true);

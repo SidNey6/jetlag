@@ -35,9 +35,12 @@ async function gunzip(bytes) {
 export function shareablePayload(scope = 'all') {
   const s = getState();
   if (scope === 'map') {
-    return { v: s.v, area: s.area, constraints: s.constraints, markers: s.markers, pois: s.pois, settings: s.settings };
+    return { v: s.v, area: s.area, constraints: s.constraints, markers: s.markers, pois: s.pois, settings: s.settings, gameSize: s.gameSize };
   }
-  return s;
+  // Ein eigenes Regelwerk ist einige Kilobyte groß und würde jeden QR-Code sprengen;
+  // es wird separat als Datei weitergegeben, nicht über den Spielstand-Link.
+  const { rules, ...rest } = s;
+  return rest;
 }
 
 export async function encodePayload(payload) {
@@ -109,6 +112,7 @@ export function openShareSheet() {
     }
 
     body.append(
+      getState().rules ? el('div', { class: 'hint', text: 'Hinweis: Dein eigenes Regelwerk wird nicht mitgeschickt – gib die JSON-Datei separat weiter.' }) : null,
       el('label', { class: 'field' }, 'Umfang',
         el('div', { class: 'seg' },
           el('button', { class: 'on', onclick: (e) => { scope = 'all'; segSwitch(e); build(); } }, 'Alles'),

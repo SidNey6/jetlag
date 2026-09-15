@@ -7,7 +7,10 @@ import * as Loc from './location.js';
 import * as MapMod from './map.js';
 import { distance, formatDistance, bearing } from './geo.js';
 import { el, clear, openSheet, confirmSheet, toast, segmented, formatTime } from './ui/ui.js';
-import { poiSheet, areaPickerSheet, nearestPoiSheet } from './overpass.js';
+import { poiSheet, areaPickerSheet, nearestPoiSheet, findPois } from './overpass.js';
+import * as Rules from './rules.js';
+import { createTimer } from './timers.js';
+import { logNote } from './rounds.js';
 
 const UNIT_STEPS = { metric: 1000, imperial: 1609.344 };
 
@@ -97,17 +100,40 @@ function openSavedPointPicker(pick) {
 
 /* ---------- Neue Frage ---------- */
 
+const FREE_TOOLS = [
+  ['radius', 'Radius', 'Bist du im Umkreis von X um diesen Punkt?'],
+  ['thermo', 'Thermometer', 'Ich bin gefahren – bin ich wärmer oder kälter?'],
+  ['compare', 'Vergleich', 'Bist du näher oder weiter an einem Ort als ich?'],
+  ['nearest', 'Nächster Ort', 'Welchem Ort aus einer Liste bist du am nächsten?'],
+  ['area', 'Gebiet', 'Bist du in diesem Gebiet (Dorf, Bezirk, Fläche)?'],
+  ['sector', 'Richtung', 'Liegst du in diesem Himmelsrichtungs-Sektor?'],
+];
+
 export function openQuestionPicker() {
+  const rules = Rules.getRules();
+  const size = Rules.currentSize();
+
   openSheet('Welche Frage?', (body, close) => {
-    const entries = [
-      ['radius', 'Radius', 'Bist du im Umkreis von X um diesen Punkt?'],
-      ['thermo', 'Thermometer', 'Ich bin gefahren – bin ich wärmer oder kälter?'],
-      ['compare', 'Vergleich', 'Bist du näher oder weiter an einem Ort als ich?'],
-      ['nearest', 'Nächster Ort', 'Welchem Ort aus einer Liste bist du am nächsten?'],
-      ['area', 'Gebiet', 'Bist du in diesem Gebiet (Bezirk, Fläche)?'],
-      ['sector', 'Richtung', 'Liegst du in diesem Himmelsrichtungs-Sektor?'],
-    ];
-    for (const [type, title, sub] of entries) {
+    if (rules) {
+      body.append(el('div', { class: 'hint' },
+        `${rules.name}`, size ? ` · Spielgröße ${size.label}` : ''));
+      for (const cat of Rules.categories()) {
+        const n = Rules.optionsFor(cat.id).length;
+        const minutes = Rules.answerMinutes(cat.id);
+        body.append(el('button', {
+          class: 'card', style: { textAlign: 'left' },
+          disabled: n === 0,
+          onclick: () => { close(); openRuleOptions(cat); },
+        },
+          el('div', { class: 'card-title' },
+            el('span', { class: 'grow', text: cat.label }),
+            el('span', { class: 'card-sub', text: [Rules.drawLabel(cat), minutes ? `${minutes} Min` : null].filter(Boolean).join(' · ') })),
+          el('div', { class: 'card-sub', text: n ? cat.prompt : 'In dieser Spielgröße nicht verfügbar' })));
+      }
+      body.append(el('div', { class: 'hint', style: { marginTop: '10px', fontWeight: '600' }, text: 'Freie Werkzeuge' }));
+    }
+
+    for (const [type, title, sub] of FREE_TOOLS) {
       const t = C.TYPES[type];
       body.append(el('button', {
         class: 'card', style: { textAlign: 'left' },
@@ -115,10 +141,63 @@ export function openQuestionPicker() {
       },
         el('div', { class: 'card-title' },
           el('span', { class: 'dot', style: { background: t.color } }), `${t.icon}  ${title}`),
-        el('div', { class: 'card-sub', text: sub }),
-      ));
+        el('div', { class: 'card-sub', text: sub })));
     }
     return [];
+  });
+}
+
+// Werte einer Regelkategorie, gefiltert auf die eingestellte Spielgröße.
+export function openRuleOptions(cat) {
+  const options = Rules.optionsFor(cat.id);
+  const unit = getState().settings.unit;
+  openSheet(cat.label, (body, close) => {
+    body.append(el('div', { class: 'hint', text: cat.prompt }));
+    let group = null;
+    for (const o of options) {
+      if (o.group && o.group !== group) {
+        group = o.group;
+        body.append(el('div', { class: 'hint', style: { marginTop: '8px', fontWeight: '600' }, text: group }));
+      }
+      const extra = [
+        o.meters ? formatDistance(o.meters, unit) : null,
+        o.radiusLabel && !o.meters ? o.radiusLabel : null,
+        o.osm ? 'aus OpenStreetMap ladbar' : null,
+      ].filter(Boolean).join(' · ');
+      body.append(el('button', {
+        class: 'card', style: { textAlign: 'left' },
+        onclick: () => { close(); startRuleQuestion(cat, o); },
+      },
+        el('div', { class: 'card-title', text: o.label }),
+        extra ? el('div', { class: 'card-sub', text: extra }) : null));
+    }
+    return [el('button', { class: 'btn grow', onclick: () => close() }, 'Zurück')];
+  });
+}
+
+// Frage nach Regelwerk stellen: Frist läuft, Protokolleintrag steht, und wo es
+// geometrisch etwas zu holen gibt, öffnet sich das passende Formular.
+export function startRuleQuestion(cat, option) {
+  const minutes = Rules.answerMinutes(cat.id);
+  if (minutes) {
+    createTimer({ name: `Antwort: ${cat.label} – ${option.label}`, kind: 'countdown', duration: minutes * 60000 });
+  }
+  logNote(`${cat.label}: ${option.label} — ${Rules.drawLabel(cat)}${minutes ? `, ${minutes} Min Frist` : ''}`);
+
+  const type = option.appType || cat.appType;
+  if (!type) {
+    toast(`Notiert. ${Rules.drawLabel(cat)}${minutes ? `, ${minutes} Min` : ''}`, 'ok');
+    document.dispatchEvent(new CustomEvent('jetlag:changed'));
+    return;
+  }
+  openQuestionForm(type, null, {
+    label: option.label,
+    radius: option.meters,
+    presets: Rules.distancePresets(cat.id),
+    poiCategory: option.osm,
+    poiRadius: option.meters,
+    matching: cat.id === 'matching',
+    ruleLabel: `${cat.label}: ${option.label}`,
   });
 }
 
@@ -168,9 +247,15 @@ function answerSeg(labels, initial, onChange) {
   return segmented([{ value: true, label: labels[0] }, { value: false, label: labels[1] }], initial, onChange);
 }
 
+// Anzeige auf drei Nachkommastellen kürzen; gerechnet wird weiter mit dem exakten
+// Meterwert, sonst stünde bei ½ Meile "0,804672" im Feld.
+function inputValue(meters) {
+  return String(+fromMeters(meters).toFixed(3));
+}
+
 export function distanceField(label, initialMeters, onChange, presets = []) {
   let meters = initialMeters;
-  const input = el('input', { type: 'number', step: '0.01', inputmode: 'decimal', value: fromMeters(meters).toString() });
+  const input = el('input', { type: 'number', step: '0.01', inputmode: 'decimal', value: inputValue(meters) });
   input.addEventListener('input', () => {
     const v = parseFloat(input.value.replace(',', '.'));
     if (isFinite(v)) { meters = toMeters(v); onChange(meters); }
@@ -179,7 +264,7 @@ export function distanceField(label, initialMeters, onChange, presets = []) {
     class: `pill ${m === meters ? 'on' : ''}`,
     onclick: (e) => {
       meters = m;
-      input.value = fromMeters(m).toString();
+      input.value = inputValue(m);
       onChange(m);
       pills.querySelectorAll('.pill').forEach((p) => p.classList.remove('on'));
       e.target.classList.add('on');
@@ -194,16 +279,17 @@ export function distanceField(label, initialMeters, onChange, presets = []) {
 
 function radiusForm(body, existing, prefill) {
   const s = getState();
-  let center = existing?.center || prefill || Loc.current() || null;
-  let centerName = existing?.centerName || (prefill ? 'gewählter Punkt' : center ? 'meine Position' : null);
-  let radius = existing?.radius ?? s.presets.radius[2];
+  let center = existing?.center || prefill?.at || Loc.current() || null;
+  let centerName = existing?.centerName || (prefill?.at ? 'gewählter Punkt' : center ? 'meine Position' : null);
+  let radius = existing?.radius ?? prefill?.radius ?? s.presets.radius[2];
   let inside = existing?.inside ?? true;
 
   const pf = pointField('Bezugspunkt', center ? { ...center, name: centerName } : null, (p) => {
     center = p; centerName = p?.name;
   });
-  const df = distanceField('Radius', radius, (m) => { radius = m; }, s.presets.radius);
-  body.append(pf.node, df.node,
+  const df = distanceField('Radius', radius, (m) => { radius = m; },
+    (prefill?.presets && prefill.presets.length) ? prefill.presets : s.presets.radius);
+  body.append(prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null, pf.node, df.node,
     el('label', { class: 'field' }, 'Antwort',
       answerSeg(['Ja – innerhalb', 'Nein – außerhalb'], inside, (v) => { inside = v; })));
 
@@ -259,8 +345,8 @@ function thermoForm(body, existing) {
 
 function compareForm(body, existing, prefill) {
   const s = getState();
-  let ref = existing?.ref || prefill || null;
-  let refName = existing?.refName || null;
+  let ref = existing?.ref || prefill?.at || null;
+  let refName = existing?.refName || prefill?.label || null;
   let myPoint = existing?.myPoint || Loc.current() || null;
   let closer = existing?.closer ?? true;
   let manual = existing?.myDistance ?? null;
@@ -281,10 +367,11 @@ function compareForm(body, existing, prefill) {
   refresh();
 
   body.append(
+    prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
     el('button', {
       class: 'btn btn-small',
-      onclick: () => nearestPoiSheet(myPoint || Loc.current(), (poi) => rf.set(poi, poi.name)),
-    }, '🔎 Nächstgelegenes Objekt suchen'),
+      onclick: () => nearestPoiSheet(myPoint || Loc.current(), (poi) => rf.set(poi, poi.name), prefill?.poiCategory),
+    }, prefill?.poiCategory ? `🔎 Nächstes „${prefill.label}" suchen` : '🔎 Nächstgelegenes Objekt suchen'),
     rf.node, mf.node,
     el('label', { class: 'field' }, `Abstand manuell (${unitSuffix()})`, manualInput),
     info,
@@ -347,10 +434,13 @@ function areaForm(body, existing) {
   };
 }
 
-function nearestForm(body, existing) {
+function nearestForm(body, existing, prefill) {
   let pois = existing?.pois || getState().pois.slice();
   let chosenId = existing?.chosenId || null;
+  let invert = existing?.invert ?? false;
+  const matching = !!prefill?.matching;
   const list = el('div', { class: 'pills' });
+  const status = el('div', { class: 'hint' });
 
   function paint() {
     clear(list);
@@ -365,9 +455,32 @@ function nearestForm(body, existing) {
       }, p.name || 'Ohne Namen'));
     }
   }
-  paint();
 
+  // Bei einer Regelfrage die passende Kategorie gleich laden – und beim Matching
+  // den eigenen nächstgelegenen Ort vorauswählen, denn genau um den geht es.
+  async function loadFromRule() {
+    const me = Loc.current();
+    if (!me) { status.textContent = 'Standort nötig – Punkt auf der Karte setzen.'; return; }
+    status.textContent = 'Lade Orte aus OpenStreetMap …';
+    try {
+      const found = await findPois(me, prefill.poiCategory, prefill.poiRadius || 15000);
+      if (!found.length) { status.textContent = 'Nichts gefunden – Umkreis über „Orte laden" vergrößern.'; return; }
+      pois = found.slice(0, 40).map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name }));
+      update((st) => { st.pois = pois; });
+      MapMod.render();
+      if (matching) chosenId = pois[0].id;
+      status.textContent = matching
+        ? `${pois.length} Orte geladen, dein nächster ist vorausgewählt.`
+        : `${pois.length} Orte geladen.`;
+      paint();
+    } catch (e) {
+      status.textContent = `Laden fehlgeschlagen: ${e.message || e}`;
+    }
+  }
+
+  paint();
   body.append(
+    prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
     el('button', {
       class: 'btn btn-small',
       onclick: () => poiSheet(Loc.current(), (found) => {
@@ -378,20 +491,33 @@ function nearestForm(body, existing) {
         paint();
       }),
     }, '🔎 Orte im Umkreis laden'),
-    el('div', { class: 'hint', text: 'Genannten Ort antippen – alle anderen schließen ihre Umgebung aus.' }),
+    status,
+    el('div', { class: 'hint', text: matching
+      ? 'Dein nächstgelegener Ort ist markiert. Antwort „Nein" schließt genau dessen Umgebung aus.'
+      : 'Genannten Ort antippen – alle anderen schließen ihre Umgebung aus.' }),
     list,
+    matching ? el('label', { class: 'field' }, 'Antwort',
+      segmented([{ value: false, label: 'Ja – gleicher Ort' }, { value: true, label: 'Nein – anderer' }],
+        invert, (v) => { invert = v; })) : null,
   );
+
+  if (prefill?.poiCategory && !existing) loadFromRule();
 
   return {
     collect() {
       if (!pois.length || !chosenId) { toast('Ort auswählen', 'error'); return null; }
-      return { type: 'nearest', pois: pois.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name })), chosenId };
+      return {
+        type: 'nearest',
+        pois: pois.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name })),
+        chosenId,
+        invert,
+      };
     },
   };
 }
 
 function sectorForm(body, existing, prefill) {
-  let center = existing?.center || prefill || Loc.current() || null;
+  let center = existing?.center || prefill?.at || Loc.current() || null;
   let from = existing?.from ?? 0;
   let to = existing?.to ?? 90;
   let radius = existing?.radius ?? null;

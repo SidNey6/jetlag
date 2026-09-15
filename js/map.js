@@ -34,6 +34,7 @@ export function initMap() {
   setTileSource(s.settings.tileUrl);
 
   layers.area = L.layerGroup().addTo(map);
+  layers.zone = L.layerGroup().addTo(map);
   layers.outlines = L.layerGroup().addTo(map);
   layers.pois = L.layerGroup().addTo(map);
   layers.markers = L.layerGroup().addTo(map);
@@ -155,6 +156,19 @@ export function render() {
   const ring = C.areaRing(s.area);
   if (ring) {
     L.polygon(ring, { color: '#e2e8f0', weight: 2, dashArray: '6 5', fill: false, interactive: false }).addTo(layers.area);
+  }
+
+  // Versteckzone aus dem Regelwerk – der Kreis, in dem sich der Versteckende bewegen darf
+  layers.zone.clearLayers();
+  if (s.hidingZone) {
+    const z = s.hidingZone;
+    L.circle([z.lat, z.lng], {
+      radius: z.radius, color: '#fbbf24', weight: 2, dashArray: '8 5',
+      fillColor: '#fbbf24', fillOpacity: 0.07, interactive: false,
+    }).addTo(layers.zone);
+    L.circleMarker([z.lat, z.lng], { radius: 4, color: '#fbbf24', fillColor: '#fbbf24', fillOpacity: 1 })
+      .addTo(layers.zone)
+      .bindTooltip(z.name || 'Versteckzone', { direction: 'top', className: 'jl-label' });
   }
 
   layers.markers.clearLayers();
