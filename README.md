@@ -155,6 +155,31 @@ Autobahnen stehen nicht in der Measuring-Liste von lifack.ch. Im freien Werkzeug
 { "label": "Autobahn", "group": "Verkehr", "sizes": ["small", "medium", "large"], "osm": "motorway" }
 ```
 
+### Eigene Hausregeln
+
+Das Format kann weit mehr als lifack.ch nutzt. Die vollständige Referenz mit Beispielen
+steht in **[rules/SCHEMA.md](rules/SCHEMA.md)**. Ausdrücken lassen sich unter anderem:
+
+| Regelart | Feld |
+|---|---|
+| Fristen mit Folge („Endgame nach X Stunden nicht erreicht → Suchende verlieren") | `round.deadlines` |
+| Gestufte Strafen für verspätete Antworten, Zeitabzug mit Faktor | `round.lateAnswer` |
+| Grenzfall-Antwort je Kategorie, mit Toleranzband | `questions[].tieBreak`, `answering.tieToleranceM` |
+| Haltestellenart als Zonenmittelpunkt, Auswahl der nächsten, Toleranz am Schild | `hidingZone.anchor…` |
+| Zone ab einer Rundenphase festgeschrieben | `hidingZone.lockAt` |
+| Im Endgame nicht bewegen, Antworten nur nah am Versteck | `endgame.hiderMayMove`, `endgame.answerWithinM` |
+| Erlaubte und verbotene Verkehrsmittel und Recherchequellen | `transport`, `research` |
+| Beliebige weitere Regeltexte | `sections` |
+| Ziehwerte je Kategorie | `questions[].draw`, `pick` |
+| Mehrere Quellen in einer Option („Bus-, Bahnlinie oder Autobahn") | `options[].osm` als Liste |
+| Linien und Flächen statt Punkte beim Matching | `options[].match: "shape"` |
+| Stadtteil, Stadtbezirk, Gemeinde – ohne Auswahl von Hand | `options[].adminLevel` |
+| Höhe über dem Meeresspiegel | `appType: "elevation"` |
+| Frei wählbares Objekt | `options[].freeChoice` |
+
+Die App prüft jede Datei vor dem Übernehmen und nennt bei Fehlern die Stelle, etwa
+`Frist "endgame": "until" fehlt` oder `Option "Spielplatz": unbekannte Quelle "spielplatz"`.
+
 **Anpassen** unter *Mehr → Regelwerk*: Spielgröße umschalten, Regeln ansehen,
 JSON direkt bearbeiten, eigene Datei laden, exportieren, zurücksetzen. Eigene Regelwerke
 werden geprüft, bevor sie greifen – fehlt etwas, sagt die Meldung was.
@@ -198,7 +223,12 @@ damit installierte Geräte das Update ziehen.
 index.html          App-Shell mit fünf Tabs
 sw.js               Service Worker: App offline, Kacheln aus dem Cache
 rules/lifack.json   Regelwerk: Spielgrößen, Fristen, Fragekategorien, Deck
+rules/SCHEMA.md     Referenz des Regelformats
 js/rules.js         Regelwerk laden, prüfen, nach Spielgröße filtern
+js/sources.js       OpenStreetMap-Quellen: Orte und Geometrien, mit Filtern
+js/elevation.js     Geländehöhe über Open-Meteo (Copernicus-Modell)
+js/phases.js        Rundenphasen, Fristenstatus, Nettozeit
+js/zone.js          Versteckzone, Haltestellen als Mittelpunkt, Versteckpunkt
 js/geo.js           Geodäsie (Distanz, Peilung, Mittelsenkrechte, Vereinfachung)
 js/constraints.js   Fragetypen: Prüffunktion, Zeichengeometrie, Restflächen-Statistik
 js/mask.js          Canvas-Overlay, das die ausgeschlossenen Flächen vereinigt

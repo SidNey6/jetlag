@@ -22,10 +22,13 @@ export function remaining(t, now = Date.now()) {
   return t.kind === 'countdown' ? t.duration - elapsed(t, now) : elapsed(t, now);
 }
 
-export function createTimer({ name, kind = 'countdown', duration = 15 * 60000, autostart = true }) {
+// meta: zusätzliche Angaben, z. B. { purpose: 'answer', categoryId } für Antwortfristen –
+// damit lässt sich später auswerten, ob und wie weit eine Antwort zu spät kam.
+export function createTimer({ name, kind = 'countdown', duration = 15 * 60000, autostart = true, meta = null }) {
   const t = {
     id: uid('tm'), name, kind, duration,
     accumulated: 0, startedAt: autostart ? Date.now() : null, running: autostart, alarmed: false,
+    meta,
   };
   update((s) => { s.timers.push(t); }, 'Timer angelegt');
   ensureTicking();
@@ -103,6 +106,16 @@ export function primeAudio() {
   } catch (e) { /* egal */ }
 }
 
+// Alarm für Regelereignisse (abgelaufene Fristen) – derselbe Ton wie bei Timern.
+export function ringAlarm(text) {
+  beep();
+  if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 600]);
+  toast(text, 'error');
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try { new Notification('Jetlag Toolkit', { body: text }); } catch (e) { /* egal */ }
+  }
+}
+
 function fireAlarm(t) {
   beep();
   if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 500]);
@@ -158,6 +171,7 @@ function tick() {
       changed = true;
       fireAlarm(t);
     }
+    // Eine abgelaufene Antwortfrist läuft ins Negative weiter: die Anzeige zeigt dann die Verspätung
   }
   if (changed) update(() => {});
   if (changed) renderTimers(); else updateFaces();
@@ -283,6 +297,18 @@ export function renderTimers() {
         el('span', { class: 'card-sub', text: t.kind === 'countdown' ? 'Countdown' : 'Stoppuhr' })),
       face,
       bar ? el('div', { class: 'progress' }, bar) : null,
+      // Antwortfristen enden nicht von selbst: erst "Antwort da" zeigt, ob und wie weit
+      // sie überzogen wurde – daran hängen die Folgen aus dem Regelwerk.
+      t.meta && t.meta.purpose === 'answer' ? el('div', { class: 'row row-wrap' },
+        el('button', {
+          class: 'btn btn-small btn-primary',
+          onclick: () => document.dispatchEvent(new CustomEvent('jetlag:answer', { detail: { timerId: t.id } })),
+        }, '✓ Antwort da'),
+        el('button', {
+          class: 'btn btn-small',
+          onclick: () => document.dispatchEvent(new CustomEvent('jetlag:answer', { detail: { timerId: t.id, excused: true } })),
+        }, '✓ entschuldigt'),
+      ) : null,
       el('div', { class: 'row row-wrap' },
         el('button', { class: 'btn btn-small', onclick: () => { primeAudio(); toggleTimer(t.id); renderTimers(); } }, t.running ? '⏸ Pause' : '▶︎ Start'),
         el('button', { class: 'btn btn-small', onclick: () => { resetTimer(t.id); renderTimers(); } }, '↺'),

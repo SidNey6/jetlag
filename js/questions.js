@@ -7,7 +7,10 @@ import * as Loc from './location.js';
 import * as MapMod from './map.js';
 import { distance, formatDistance, bearing } from './geo.js';
 import { el, clear, append, openSheet, confirmSheet, toast, segmented, formatTime } from './ui/ui.js';
-import { poiSheet, areaPickerSheet, findPois, findNearestFeatures, REFERENCES } from './overpass.js';
+import { poiSheet, areaPickerSheet, findPois, findNearestFeatures, findCandidates, adminAreaAt, REFERENCES, POI_CATEGORIES } from './overpass.js';
+import { poiCategory, reference } from './sources.js';
+import { elevationGridFor, fetchElevationAt } from './elevation.js';
+import { sampleGrid } from './geo.js';
 import * as Rules from './rules.js';
 import { createTimer } from './timers.js';
 import { logNote } from './rounds.js';
@@ -107,6 +110,7 @@ const FREE_TOOLS = [
   ['nearest', 'Nächster Ort', 'Welchem Ort aus einer Liste bist du am nächsten?'],
   ['area', 'Gebiet', 'Bist du in diesem Gebiet (Dorf, Bezirk, Fläche)?'],
   ['sector', 'Richtung', 'Liegst du in diesem Himmelsrichtungs-Sektor?'],
+  ['elevation', 'Höhe', 'Bist du näher am Meeresspiegel als ich?'],
 ];
 
 export function openQuestionPicker() {
@@ -159,10 +163,16 @@ export function openRuleOptions(cat) {
         group = o.group;
         append(body, el('div', { class: 'hint', style: { marginTop: '8px', fontWeight: '600' }, text: group }));
       }
+      const typ = 'appType' in o ? o.appType : cat.appType;
+      const quellen = Rules.optionSources(o);
       const extra = [
         o.meters ? formatDistance(o.meters, unit) : null,
         o.radiusLabel && !o.meters ? o.radiusLabel : null,
-        o.osm ? 'aus OpenStreetMap ladbar' : null,
+        o.freeChoice ? 'Objekt frei wählbar' : null,
+        typ === 'elevation' ? 'Geländehöhe' : null,
+        o.adminLevel ? `Verwaltungsebene ${o.adminLevel}` : null,
+        quellen.length > 1 ? `${quellen.length} Quellen` : (quellen.length ? 'aus OpenStreetMap' : null),
+        typ === null ? 'nur Protokoll' : null,
       ].filter(Boolean).join(' · ');
       append(body, el('button', {
         class: 'card', style: { textAlign: 'left' },
@@ -178,15 +188,23 @@ export function openRuleOptions(cat) {
 // Frage nach Regelwerk stellen: Frist läuft, Protokolleintrag steht, und wo es
 // geometrisch etwas zu holen gibt, öffnet sich das passende Formular.
 export function startRuleQuestion(cat, option) {
-  const minutes = Rules.answerMinutes(cat.id);
-  if (minutes) {
-    createTimer({ name: `Antwort: ${cat.label} – ${option.label}`, kind: 'countdown', duration: minutes * 60000 });
-  }
-  logNote(`${cat.label}: ${option.label} — ${Rules.drawLabel(cat)}${minutes ? `, ${minutes} Min Frist` : ''}`);
+  if (option.freeChoice) { openFreeChoice(cat, option); return; }
 
-  const type = option.appType || cat.appType;
+  const minutes = Rules.answerMinutes(cat.id);
+  const folge = takePendingPenalty();
+  const zug = drawText(cat, folge);
+  if (minutes) {
+    createTimer({
+      name: `Antwort: ${cat.label} – ${option.label}`, kind: 'countdown', duration: minutes * 60000,
+      meta: { purpose: 'answer', categoryId: cat.id, option: option.label },
+    });
+  }
+  logNote(`${cat.label}: ${option.label} — ${zug}${minutes ? `, ${minutes} Min Frist` : ''}`);
+  if (folge) toast(`Wegen verspäteter Antwort: ${zug}`, 'ok');
+
+  const type = 'appType' in option ? option.appType : cat.appType;
   if (!type) {
-    toast(`Notiert. ${Rules.drawLabel(cat)}${minutes ? `, ${minutes} Min` : ''}`, 'ok');
+    toast(`Notiert. ${zug}${minutes ? `, ${minutes} Min` : ''}`, 'ok');
     document.dispatchEvent(new CustomEvent('jetlag:changed'));
     return;
   }
@@ -194,19 +212,77 @@ export function startRuleQuestion(cat, option) {
     label: option.label,
     radius: option.meters,
     presets: Rules.distancePresets(cat.id),
-    poiCategory: option.osm,
+    sources: Rules.optionSources(option),
     poiRadius: option.meters,
-    matching: cat.id === 'matching',
+    adminLevel: option.adminLevel,
+    match: option.match,
+    mode: type === 'nearest' ? Rules.nearestMode(cat.id) : null,
     ruleLabel: `${cat.label}: ${option.label}`,
+    tieBreak: Rules.tieBreak(cat.id),
+    tieToleranceM: Rules.tieToleranceM(),
   });
 }
 
+// Verspätete Antworten wirken sich auf die NÄCHSTE Frage aus (Regel "lateAnswer").
+function takePendingPenalty() {
+  const p = getState().game.pending;
+  if (!p || (!p.nextDrawDelta && !p.nextQuestionFree)) return null;
+  update((st) => { st.game.pending = null; });
+  return p;
+}
+
+function drawText(cat, folge) {
+  if (folge && folge.nextQuestionFree) return 'gratis, keine Karten';
+  const basis = Rules.drawLabel(cat);
+  if (!folge || !folge.nextDrawDelta || !cat.draw) return basis || 'keine Karten';
+  const draw = Math.max(0, cat.draw + folge.nextDrawDelta);
+  const pick = Math.min(cat.pick ?? draw, draw);
+  const delta = folge.nextDrawDelta > 0 ? `+${folge.nextDrawDelta}` : `−${Math.abs(folge.nextDrawDelta)}`;
+  return draw === pick ? `${draw} ziehen (${delta})` : `${draw} ziehen (${delta}), ${pick} behalten`;
+}
+
+// "Freebie": die fragende Seite wählt das Objekt selbst. Angeboten wird, was sich
+// für den Fragetyp automatisch auswerten lässt.
+function openFreeChoice(cat, option) {
+  const type = ('appType' in option && option.appType) || cat.appType;
+  openSheet(`${cat.label}: ${option.label}`, (body, close) => {
+    const pick = (id, label, extra = {}) => el('button', {
+      class: 'pill',
+      onclick: () => { close(); startRuleQuestion(cat, { ...option, freeChoice: false, label, osm: id, ...extra }); },
+    }, label);
+
+    append(body, el('div', { class: 'hint', text: cat.prompt }));
+    if (type === 'compare') {
+      append(body,
+        el('label', { class: 'field' }, 'Bezugsobjekt',
+          el('div', { class: 'pills' }, REFERENCES.filter((r) => !r.param && r.kind !== 'elevation').map((r) => pick(r.id, r.label)))),
+        el('div', { class: 'pills' }, pick(null, 'Meeresspiegel', { appType: 'elevation', osm: undefined })));
+    } else {
+      append(body,
+        el('label', { class: 'field' }, 'Orte',
+          el('div', { class: 'pills' }, POI_CATEGORIES.map((c) => pick(c.id, c.label)))),
+        el('label', { class: 'field' }, 'Linien und Flächen',
+          el('div', { class: 'pills' }, REFERENCES.filter((r) => ['line', 'lines'].includes(r.geom) && !r.param)
+            .map((r) => pick(r.id, r.label, { match: 'shape' })))));
+    }
+    return [el('button', { class: 'btn grow', onclick: () => close() }, 'Abbrechen')];
+  });
+}
+
+function tieHint(prefill) {
+  if (!prefill || !prefill.tieBreak) return null;
+  const tol = prefill.tieToleranceM ? ` (innerhalb ${formatDistance(prefill.tieToleranceM, getState().settings.unit)})` : '';
+  return el('div', { class: 'hint', text: `Grenzfall-Regel: genau auf der Grenze gilt „${Rules.TIE_LABEL[prefill.tieBreak] || prefill.tieBreak}"${tol}.` });
+}
+
 export function openQuestionForm(type, existing = null, prefill = null) {
-  const builders = { radius: radiusForm, thermo: thermoForm, compare: compareForm, area: areaForm, nearest: nearestForm, sector: sectorForm };
+  const builders = { radius: radiusForm, thermo: thermoForm, compare: compareForm, area: areaForm, nearest: nearestForm, sector: sectorForm, elevation: elevationForm };
   const build = builders[type];
   if (!build) return;
   openSheet(existing ? 'Frage bearbeiten' : C.TYPES[type].label, (body, close) => {
     const form = build(body, existing, prefill);
+    const hint = tieHint(prefill);
+    if (hint) body.append(hint);
     return [
       el('button', { class: 'btn grow', onclick: () => close() }, 'Abbrechen'),
       el('button', {
@@ -214,6 +290,11 @@ export function openQuestionForm(type, existing = null, prefill = null) {
         onclick: () => {
           const c = form.collect();
           if (!c) return;
+          // Die Grenzfall-Regel gehört zur Frage: sie bestimmt, wem das Toleranzband zufällt
+          if (!existing && prefill && prefill.tieBreak) {
+            c.tieBreak = prefill.tieBreak;
+            c.tieToleranceM = prefill.tieToleranceM || 0;
+          }
           commit(c, existing);
           close();
         },
@@ -302,7 +383,7 @@ function radiusForm(body, existing, prefill) {
   };
 }
 
-function thermoForm(body, existing) {
+function thermoForm(body, existing, prefill) {
   const s = getState();
   let from = existing?.from || s.ui.thermoStart || null;
   let to = existing?.to || Loc.current() || null;
@@ -345,7 +426,8 @@ function thermoForm(body, existing) {
 
 function compareForm(body, existing, prefill) {
   const s = getState();
-  let refId = existing?.refId || prefill?.poiCategory || null;
+  let refId = existing?.refId || (prefill?.sources && prefill.sources.length ? prefill.sources : null);
+  const params = prefill?.adminLevel ? { adminLevel: prefill.adminLevel } : (existing?.params || {});
   let features = existing?.features || null;
   let refName = existing?.refName || prefill?.label || null;
   let ref = existing?.ref || null;
@@ -379,19 +461,23 @@ function compareForm(body, existing, prefill) {
 
   // Ausgedehnte Objekte wie Autobahnen oder Küsten lassen sich nicht als Punkt
   // angeben; deshalb wird die echte Geometrie geholt und darauf gemessen.
-  async function search(id) {
+  // ids: eine Quelle oder mehrere ("Linie oder Autobahn") – gemessen wird zum nächsten Objekt.
+  async function search(ids) {
     const from = myPoint || Loc.current();
     if (!from) { status.textContent = 'Kein Standort – trag den Abstand unten direkt ein.'; return; }
     myPoint = from;
-    refId = id;
+    refId = ids;
     paintRefs();
-    const spec = REFERENCES.find((r) => r.id === id);
-    status.textContent = `Suche ${spec.label} …`;
+    const liste = Array.isArray(ids) ? ids : [ids];
+    const label = prefill?.label && liste === prefill.sources
+      ? prefill.label
+      : liste.map((id) => reference(id)?.label || id).join(' / ');
+    status.textContent = `Suche ${label} …`;
     try {
-      const res = await findNearestFeatures(from, id, { area: getState().area });
+      const res = await findNearestFeatures(from, liste, { area: getState().area, params });
       features = res.features;
       ref = null;
-      refName = res.name ? `${spec.label} (${res.name})` : spec.label;
+      refName = res.name ? `${label} (${res.name})` : label;
       const arten = [...new Set(res.features.map((f) => f.type))]
         .map((t) => ({ line: 'Linie', polygon: 'Fläche', point: 'Punkt' }[t] || t)).join('/');
       status.textContent = `${refName} · ${formatDistance(res.distance, getState().settings.unit)} · als ${arten} gemessen`;
@@ -405,9 +491,12 @@ function compareForm(body, existing, prefill) {
   const refRow = el('div', { class: 'pills' });
   function paintRefs() {
     clear(refRow);
-    for (const r of REFERENCES) {
+    // Referenzen mit Platzhaltern (Verwaltungsgrenze einer Ebene) und Höhenwerte
+    // kommen nur über das Regelwerk bzw. das Höhenwerkzeug
+    const aktiv = new Set(Array.isArray(refId) ? refId : [refId]);
+    for (const r of REFERENCES.filter((x) => !x.param && x.kind !== 'elevation')) {
       refRow.append(el('button', {
-        class: `pill ${r.id === refId ? 'on' : ''}`,
+        class: `pill ${aktiv.has(r.id) && !(Array.isArray(refId) && refId.length > 1) ? 'on' : ''}`,
         onclick: () => search(r.id),
       }, r.label));
     }
@@ -435,6 +524,9 @@ function compareForm(body, existing, prefill) {
 
   refresh();
   if (refId && !existing && !features) search(refId);
+  if (Array.isArray(refId) && refId.length > 1) {
+    status.textContent = `Mehrere Quellen: ${refId.map((id) => reference(id)?.label || id).join(', ')}`;
+  }
 
   return {
     collect() {
@@ -442,7 +534,7 @@ function compareForm(body, existing, prefill) {
       if (currentDistance() == null) { toast('Abstand unbekannt – Standort fehlt', 'error'); return null; }
       return {
         type: 'compare',
-        refId, refName,
+        refId, refName, params,
         features: features || null,
         ref: ref ? { lat: ref.lat, lng: ref.lng } : null,
         myPoint: myPoint ? { lat: myPoint.lat, lng: myPoint.lng } : null,
@@ -453,7 +545,7 @@ function compareForm(body, existing, prefill) {
   };
 }
 
-function areaForm(body, existing) {
+function areaForm(body, existing, prefill) {
   let ring = existing?.ring || null;
   let name = existing?.name || '';
   let inside = existing?.inside ?? true;
@@ -461,7 +553,25 @@ function areaForm(body, existing) {
   const nameInput = el('input', { value: name, placeholder: 'z. B. Bezirk Mitte' });
   nameInput.addEventListener('input', () => { name = nameInput.value; });
 
-  append(body, 
+  // Regeloption mit Verwaltungsebene ("Stadtteil", "Gemeinde"): das Gebiet am eigenen
+  // Standort wird selbst geladen – "ist dein Stadtteil derselbe wie meiner?"
+  async function loadLevel(level) {
+    const me = Loc.current();
+    if (!me) { info.textContent = 'Kein Standort – Gebiet unten selbst laden.'; return; }
+    info.textContent = `Lade Verwaltungsebene ${level} an deinem Standort …`;
+    try {
+      const a = await adminAreaAt(me, level);
+      ring = a.ring;
+      name = a.name;
+      nameInput.value = name;
+      info.textContent = `${a.name} · Ebene ${level} · ${ring.length} Stützpunkte${a.offline ? ' · offline' : ''}`;
+    } catch (e) {
+      info.textContent = String(e.message || e);
+    }
+  }
+
+  append(body,
+    prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
     el('button', {
       class: 'btn btn-small',
       onclick: () => areaPickerSheet(Loc.current(), (area) => {
@@ -485,6 +595,7 @@ function areaForm(body, existing) {
     el('label', { class: 'field' }, 'Antwort',
       answerSeg(['Ja – im Gebiet', 'Nein – außerhalb'], inside, (v) => { inside = v; })),
   );
+  if (prefill?.adminLevel && !existing) loadLevel(prefill.adminLevel);
 
   return {
     collect() {
@@ -495,20 +606,31 @@ function areaForm(body, existing) {
 }
 
 function nearestForm(body, existing, prefill) {
-  let pois = existing?.pois || getState().pois.slice();
+  let pois = existing?.pois || (existing?.candidates ? null : getState().pois.slice());
+  let candidates = existing?.candidates || null;
   let chosenId = existing?.chosenId || null;
   let invert = existing?.invert ?? false;
-  const matching = !!prefill?.matching;
+  // "same": ist dein nächstes X dasselbe wie meines? – "which": welchem X bist du am nächsten?
+  const same = prefill?.mode === 'same' || !!prefill?.matching || existing?.mode === 'same';
+  const sources = prefill?.sources || [];
+  // Nur Punktkategorien → schnelle Voronoi-Zellen. Linien, Flächen oder ausdrücklich
+  // "shape" → Objekte mit Geometrie, ausgewertet auf dem Raster.
+  const nurPunkte = sources.length > 0 && prefill?.match !== 'shape' && sources.every((id) => poiCategory(id));
   const list = el('div', { class: 'pills' });
   const status = el('div', { class: 'hint' });
 
+  function eintraege() {
+    return candidates || pois || [];
+  }
+
   function paint() {
     clear(list);
-    if (!pois.length) {
+    const liste = eintraege();
+    if (!liste.length) {
       list.append(el('div', { class: 'hint', text: 'Noch keine Orte geladen.' }));
       return;
     }
-    for (const p of pois) {
+    for (const p of liste) {
       list.append(el('button', {
         class: `pill ${p.id === chosenId ? 'on' : ''}`,
         onclick: () => { chosenId = p.id; paint(); },
@@ -516,22 +638,37 @@ function nearestForm(body, existing, prefill) {
     }
   }
 
-  // Bei einer Regelfrage die passende Kategorie gleich laden – und beim Matching
-  // den eigenen nächstgelegenen Ort vorauswählen, denn genau um den geht es.
   async function loadFromRule() {
     const me = Loc.current();
     if (!me) { status.textContent = 'Standort nötig – Punkt auf der Karte setzen.'; return; }
-    status.textContent = 'Lade Orte aus OpenStreetMap …';
+    status.textContent = 'Lade aus OpenStreetMap …';
     try {
-      const found = await findPois(me, prefill.poiCategory, prefill.poiRadius || 15000);
-      if (!found.length) { status.textContent = 'Nichts gefunden – Umkreis über „Orte laden" vergrößern.'; return; }
-      pois = found.slice(0, 40).map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name }));
-      update((st) => { st.pois = pois; });
-      MapMod.render();
-      if (matching) chosenId = pois[0].id;
-      status.textContent = matching
-        ? `${pois.length} Orte geladen, dein nächster ist vorausgewählt.`
-        : `${pois.length} Orte geladen.`;
+      if (nurPunkte) {
+        const radius = prefill.poiRadius || 15000;
+        const alle = [];
+        for (const id of sources) alle.push(...await findPois(me, id, radius));
+        const gesehen = new Set();
+        pois = alle.sort((a, b) => a.distance - b.distance)
+          .filter((p) => !gesehen.has(p.id) && gesehen.add(p.id))
+          .slice(0, 40)
+          .map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name }));
+        candidates = null;
+        update((st) => { st.pois = pois; });
+        MapMod.render();
+      } else {
+        const res = await findCandidates(me, sources, {
+          area: getState().area,
+          params: prefill.adminLevel ? { adminLevel: prefill.adminLevel } : {},
+        });
+        candidates = res.candidates;
+        pois = null;
+      }
+      const liste = eintraege();
+      if (!liste.length) { status.textContent = 'Nichts gefunden.'; paint(); return; }
+      if (same) chosenId = liste[0].id;
+      status.textContent = same
+        ? `${liste.length} geladen, dein nächstes ist vorausgewählt: ${liste[0].name}.`
+        : `${liste.length} geladen.`;
       paint();
     } catch (e) {
       status.textContent = `Laden fehlgeschlagen: ${e.message || e}`;
@@ -539,39 +676,81 @@ function nearestForm(body, existing, prefill) {
   }
 
   paint();
-  append(body, 
+  append(body,
     prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
     el('button', {
       class: 'btn btn-small',
       onclick: () => poiSheet(Loc.current(), (found) => {
         pois = found;
+        candidates = null;
         chosenId = null;
-        update((s) => { s.pois = found; }, null);
+        update((st) => { st.pois = found; }, null);
         MapMod.render();
         paint();
       }),
     }, '🔎 Orte im Umkreis laden'),
     status,
-    el('div', { class: 'hint', text: matching
-      ? 'Dein nächstgelegener Ort ist markiert. Antwort „Nein" schließt genau dessen Umgebung aus.'
-      : 'Genannten Ort antippen – alle anderen schließen ihre Umgebung aus.' }),
+    el('div', { class: 'hint', text: same
+      ? 'Dein nächstes ist markiert. Antwort „Nein" schließt genau dessen Umgebung aus.'
+      : 'Genanntes antippen – alle anderen schließen ihre Umgebung aus.' }),
     list,
-    matching ? el('label', { class: 'field' }, 'Antwort',
-      segmented([{ value: false, label: 'Ja – gleicher Ort' }, { value: true, label: 'Nein – anderer' }],
+    same ? el('label', { class: 'field' }, 'Antwort',
+      segmented([{ value: false, label: 'Ja – dasselbe' }, { value: true, label: 'Nein – ein anderes' }],
         invert, (v) => { invert = v; })) : null,
   );
 
-  if (prefill?.poiCategory && !existing) loadFromRule();
+  if (sources.length && !existing) loadFromRule();
 
   return {
     collect() {
-      if (!pois.length || !chosenId) { toast('Ort auswählen', 'error'); return null; }
-      return {
-        type: 'nearest',
-        pois: pois.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name })),
-        chosenId,
-        invert,
-      };
+      const liste = eintraege();
+      if (!liste.length || !chosenId) { toast('Auswahl fehlt', 'error'); return null; }
+      const base = { type: 'nearest', chosenId, invert, mode: same ? 'same' : 'which' };
+      if (candidates) return { ...base, candidates };
+      return { ...base, pois: pois.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name })) };
+    },
+  };
+}
+
+// "Bist du näher am Meeresspiegel als ich?" – Höhe aus dem Geländemodell, keine Eingabe nötig.
+function elevationForm(body, existing, prefill) {
+  let grid = existing?.grid || null;
+  let myPoint = existing?.myPoint || Loc.current() || null;
+  let myElevation = existing?.myElevation ?? null;
+  let closer = existing?.closer ?? true;
+  const status = el('div', { class: 'card-sub' });
+
+  async function load() {
+    if (!getState().area) { status.textContent = 'Erst ein Spielgebiet festlegen – die Höhe wird darüber als Raster geladen.'; return; }
+    if (!myPoint) { status.textContent = 'Kein Standort.'; return; }
+    status.textContent = 'Lade Geländehöhen …';
+    try {
+      grid = await elevationGridFor(getState().area, myPoint, {
+        onWait: (sek) => { status.textContent = `Höhendienst gedrosselt – warte ${sek} Sekunden …`; },
+      });
+      myElevation = sampleGrid(grid, myPoint);
+      if (myElevation == null) myElevation = await fetchElevationAt(myPoint);
+      status.textContent = `Deine Höhe: ${Math.round(myElevation)} m ü. NN · Raster ${grid.cols}×${grid.rows}${grid.offline ? ' · offline' : ''}`;
+    } catch (e) {
+      status.textContent = String(e.message || e);
+    }
+  }
+
+  append(body,
+    prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
+    status,
+    el('div', { class: 'hint', text: 'Quelle: Copernicus-Geländemodell (90 m). Gebäude und Brücken zählen nicht mit.' }),
+    el('label', { class: 'field' }, 'Antwort',
+      answerSeg(['Näher am Meeresspiegel', 'Weiter weg'], closer, (v) => { closer = v; })),
+  );
+  if (!existing) load();
+  else status.textContent = `Deine Höhe: ${Math.round(myElevation)} m ü. NN`;
+
+  return {
+    collect() {
+      if (!grid || myElevation == null) { toast('Höhendaten fehlen noch', 'error'); return null; }
+      const { offline, ...rein } = grid;
+      return { type: 'elevation', grid: rein, myPoint: { lat: myPoint.lat, lng: myPoint.lng }, myElevation, closer };
     },
   };
 }

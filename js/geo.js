@@ -186,6 +186,18 @@ export function distanceToPolygon(p, ring) {
   return Math.sqrt(best);
 }
 
+// Abstand zum Rand eines Rings, egal ob der Punkt innen oder außen liegt.
+export function distanceToRing(p, ring) {
+  if (!ring || ring.length < 2) return Infinity;
+  const mLng = metersPerDegLng(p.lat);
+  let best = Infinity;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const d2 = sqDistToSegment(p, ring[j], ring[i], mLng);
+    if (d2 < best) best = d2;
+  }
+  return Math.sqrt(best);
+}
+
 // Umgebende Rechtecke je Objekt, damit weit entfernte Linien gar nicht erst
 // durchgerechnet werden. In einer WeakMap, nicht am Objekt – sonst landeten sie
 // im gespeicherten Spielstand.
@@ -210,13 +222,16 @@ function boxLowerBound(p, b, mLng) {
 }
 
 // features: [{ type: 'point' | 'line' | 'polygon', points: [{lat,lng}, ...] }]
-export function distanceToFeatures(p, features) {
+// limit: Objekte, die sicher mindestens so weit weg sind, werden übersprungen. Das
+// Ergebnis ist dann nur als "nicht näher als limit" verlässlich – genau das braucht
+// ein Argmin über viele Kandidaten.
+export function distanceToFeatures(p, features, limit = Infinity) {
   if (!features || !features.length) return Infinity;
   const mLng = metersPerDegLng(p.lat);
   let best = Infinity;
   for (const f of features) {
     if (!f.points || !f.points.length) continue;
-    if (f.points.length > 2 && boxLowerBound(p, featureBox(f), mLng) >= best) continue;
+    if (f.points.length > 2 && boxLowerBound(p, featureBox(f), mLng) >= Math.min(best, limit)) continue;
     let d;
     if (f.type === 'polygon') d = distanceToPolygon(p, f.points);
     else if (f.type === 'line') d = distanceToLine(p, f.points);
@@ -295,4 +310,23 @@ function sqSegDist(p, a, b) {
   }
   dx = p.lng - x; dy = p.lat - y;
   return dx * dx + dy * dy;
+}
+
+/* ---------- Rasterwerte (z. B. Geländehöhe) ---------- */
+
+// grid: { south, north, west, east, rows, cols, values } – values zeilenweise ab Süden,
+// Werte liegen auf den Gitterknoten. Bilinear interpoliert; außerhalb: null.
+export function sampleGrid(grid, p) {
+  if (!grid || !grid.values) return null;
+  const { south, north, west, east, rows, cols, values } = grid;
+  if (p.lat < south || p.lat > north || p.lng < west || p.lng > east) return null;
+  const fy = rows > 1 ? ((p.lat - south) / (north - south)) * (rows - 1) : 0;
+  const fx = cols > 1 ? ((p.lng - west) / (east - west)) * (cols - 1) : 0;
+  const r0 = Math.min(rows - 1, Math.floor(fy)), c0 = Math.min(cols - 1, Math.floor(fx));
+  const r1 = Math.min(rows - 1, r0 + 1), c1 = Math.min(cols - 1, c0 + 1);
+  const ty = fy - r0, tx = fx - c0;
+  const v = (r, c) => values[r * cols + c];
+  const a = v(r0, c0), b = v(r0, c1), c = v(r1, c0), d = v(r1, c1);
+  if ([a, b, c, d].some((x) => x == null || Number.isNaN(x))) return null;
+  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }

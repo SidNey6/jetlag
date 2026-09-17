@@ -146,10 +146,16 @@ export function render() {
   const s = getState();
   const active = s.constraints.filter((c) => c.active !== false);
 
+  // Rasterformen brauchen einen Rahmen: das Spielgebiet mit etwas Rand
+  const b = C.areaBounds(s.area);
+  const ctx = {
+    bounds: b ? padBounds(b, 0.06) : null,
+    cols: powerSaving() ? 70 : 110,
+  };
   const shapes = [];
   for (const c of active) {
     const color = (C.TYPES[c.type] || {}).color;
-    for (const sh of C.shapes(c)) shapes.push({ ...sh, color });
+    for (const sh of C.shapes(c, ctx)) shapes.push({ ...sh, color });
   }
   mask.setShapes(shapes);
   mask.setArea(C.areaRing(s.area));
@@ -165,7 +171,7 @@ export function render() {
       } else if (o.kind === 'path') {
         const cls = o.closed ? L.polygon : L.polyline;
         cls(o.points, {
-          color, weight: 2, opacity: 0.95,
+          color, weight: o.strong ? 3.5 : 2, opacity: o.faint ? 0.35 : 0.95,
           dashArray: o.arrow ? '6 4' : null,
           fill: false, interactive: false,
         }).addTo(layers.outlines);
@@ -195,6 +201,15 @@ export function render() {
     L.circleMarker([z.lat, z.lng], { radius: 4, color: '#fbbf24', fillColor: '#fbbf24', fillOpacity: 1 })
       .addTo(layers.zone)
       .bindTooltip(z.name || 'Versteckzone', { direction: 'top', className: 'jl-label' });
+    // Toleranz am Mittelpunkt (z. B. "Schild ±5 m")
+    if (z.toleranceM) {
+      L.circle([z.lat, z.lng], { radius: z.toleranceM, color: '#fbbf24', weight: 1, fillOpacity: 0.25, interactive: false }).addTo(layers.zone);
+    }
+  }
+  if (s.hidingSpot) {
+    L.circleMarker([s.hidingSpot.lat, s.hidingSpot.lng], { radius: 6, color: '#fff', weight: 2, fillColor: '#f43f5e', fillOpacity: 1 })
+      .addTo(layers.zone)
+      .bindTooltip('Versteckpunkt', { direction: 'top', className: 'jl-label' });
   }
 
   layers.markers.clearLayers();
@@ -214,6 +229,11 @@ export function render() {
       radius: 5, color: '#fbbf24', weight: 2, fillColor: '#0b1020', fillOpacity: 1,
     }).addTo(layers.pois).bindTooltip(p.name || 'POI', { direction: 'top', className: 'jl-label' });
   }
+}
+
+function padBounds(b, f) {
+  const dLat = (b.north - b.south) * f, dLng = (b.east - b.west) * f;
+  return { south: b.south - dLat, north: b.north + dLat, west: b.west - dLng, east: b.east + dLng };
 }
 
 function popupFor(m) {

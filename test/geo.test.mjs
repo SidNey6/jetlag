@@ -300,3 +300,87 @@ test('Kachelliste deckt den Bereich ab und hält das Limit ein', () => {
   assert.ok(list.some((t) => t.z === z && t.x === cx && t.y === cy));
   assert.ok(TM.tileList({ south: -60, north: 70, west: -170, east: 170 }, 1, 12, 500).length <= 501);
 });
+
+/* ---------- Grenzfälle, Linien-Matching, Höhe, Raster ---------- */
+
+test('Grenzfall-Regel: das Toleranzband gehört zur Grenzfall-Antwort', () => {
+  const basis = { type: 'radius', center: BERLIN, radius: 1000, tieToleranceM: 20 };
+  const knappDraussen = geo.destination(BERLIN, 0, 1010);
+  const klarDraussen = geo.destination(BERLIN, 0, 1100);
+  // Regel "Radius: drin" – wer 10 m außerhalb steht, hätte "drin" gesagt
+  const drin = { ...basis, inside: true, tieBreak: 'inside' };
+  const draussen = { ...basis, inside: false, tieBreak: 'inside' };
+  assert.equal(C.allows(drin, knappDraussen), true);
+  assert.equal(C.allows(draussen, knappDraussen), false);
+  assert.equal(C.allows(draussen, klarDraussen), true);
+  // Ohne Regel entscheidet die exakte Grenze
+  assert.equal(C.allows({ ...basis, inside: true }, knappDraussen), false);
+});
+
+test('Grenzfall-Regel wirkt bei jedem Fragetyp', () => {
+  const tol = 50;
+  // Thermometer: knapp auf der Mittelsenkrechten gilt "wärmer"
+  const to = geo.destination(BERLIN, 90, 2000);
+  const mitte = geo.midpoint(BERLIN, to);
+  const knappKaelter = geo.destination(mitte, 270, 10);
+  assert.equal(C.allows({ type: 'thermo', from: BERLIN, to, warmer: true, tieBreak: 'warmer', tieToleranceM: tol }, knappKaelter), true);
+  assert.equal(C.allows({ type: 'thermo', from: BERLIN, to, warmer: false, tieBreak: 'warmer', tieToleranceM: tol }, knappKaelter), false);
+  // Vergleich: knapp weiter weg gilt "näher"
+  const c = { type: 'compare', ref: BERLIN, myDistance: 1000, tieBreak: 'closer', tieToleranceM: tol };
+  const knappWeiter = geo.destination(BERLIN, 0, 1020);
+  assert.equal(C.allows({ ...c, closer: true }, knappWeiter), true);
+  assert.equal(C.allows({ ...c, closer: false }, knappWeiter), false);
+});
+
+test('Matching auf Linien: nächste Linie statt nächster Punkt', () => {
+  // Zwei parallele Nord-Süd-Linien, 2 km auseinander
+  const west = [{ lat: 52.40, lng: 13.30 }, { lat: 52.60, lng: 13.30 }];
+  const ost = [{ lat: 52.40, lng: 13.33 }, { lat: 52.60, lng: 13.33 }];
+  const candidates = [
+    { id: 'bus:1', name: 'Bus 1', features: [{ type: 'line', points: west }] },
+    { id: 'bus:2', name: 'Bus 2', features: [{ type: 'line', points: ost }] },
+  ];
+  const ja = { type: 'nearest', candidates, chosenId: 'bus:1' };
+  const nein = { ...ja, invert: true };
+  const nahWest = { lat: 52.5, lng: 13.305 }, nahOst = { lat: 52.5, lng: 13.328 };
+  assert.equal(C.allows(ja, nahWest), true);
+  assert.equal(C.allows(ja, nahOst), false);
+  assert.equal(C.allows(nein, nahOst), true);
+  // Ein Punkt weit nördlich neben der West-Linie gehört zu ihr, obwohl die
+  // Mittelpunkte beider Linien gleich weit entfernt wären
+  assert.equal(C.allows(ja, { lat: 52.59, lng: 13.301 }), true);
+  assert.equal(C.needsRaster(ja), true);
+  assert.equal(C.describe(nein), 'Nicht am nächsten an Bus 1 (von 2)');
+});
+
+test('Höhe: näher am Meeresspiegel heißt niedriger gelegen', () => {
+  // Gitter steigt von 50 m im Westen auf 350 m im Osten
+  const grid = { south: 50.6, north: 50.8, west: 7.0, east: 7.2, rows: 2, cols: 2, values: [50, 350, 50, 350] };
+  const ich = { lat: 50.7, lng: 7.1 }; // 200 m
+  const naeher = { type: 'elevation', grid, myPoint: ich, myElevation: geo.sampleGrid(grid, ich), closer: true };
+  assert.ok(Math.abs(naeher.myElevation - 200) < 1e-9);
+  assert.equal(C.allows(naeher, { lat: 50.7, lng: 7.02 }), true, 'westlich = tiefer');
+  assert.equal(C.allows(naeher, { lat: 50.7, lng: 7.18 }), false, 'östlich = höher');
+  assert.equal(C.allows({ ...naeher, closer: false }, { lat: 50.7, lng: 7.18 }), true);
+  assert.equal(C.allows(naeher, { lat: 49, lng: 7 }), true, 'ohne Höhenwert nicht ausschließen');
+  const area = { type: 'bbox', bounds: { south: 50.6, north: 50.8, west: 7.0, east: 7.2 } };
+  const st = C.remainingStats(area, [naeher], 20000);
+  assert.ok(Math.abs(st.fraction - 0.5) < 0.03, `erwartet 50 %, war ${(st.fraction * 100).toFixed(1)} %`);
+});
+
+test('Raster bildet die Auswertung ab und wird gecacht', () => {
+  const grid = { south: 50.6, north: 50.8, west: 7.0, east: 7.2, rows: 2, cols: 2, values: [50, 350, 50, 350] };
+  const c = { type: 'elevation', grid, myPoint: { lat: 50.7, lng: 7.1 }, myElevation: 200, closer: true };
+  const bounds = { south: 50.6, north: 50.8, west: 7.0, east: 7.2 };
+  const r = C.rasterFor(c, bounds, 40);
+  assert.equal(r.cols, 40);
+  assert.ok(r.rows >= 10);
+  // linke Spalte erlaubt (0), rechte Spalte ausgeschlossen (1)
+  assert.equal(r.bits[0], 0);
+  assert.equal(r.bits[r.cols - 1], 1);
+  const anteil = r.bits.reduce((n, b) => n + b, 0) / r.bits.length;
+  assert.ok(Math.abs(anteil - 0.5) < 0.05);
+  assert.equal(C.rasterFor(c, bounds, 40), r, 'zweiter Aufruf aus dem Cache');
+  const sh = C.shapes(c, { bounds, cols: 40 });
+  assert.equal(sh[0].kind, 'raster');
+});

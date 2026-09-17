@@ -109,10 +109,12 @@ export function accuracy() {
 }
 
 // Im Hintergrund braucht niemand Positionsaktualisierungen.
-document.addEventListener('visibilitychange', () => {
-  paused = document.visibilityState !== 'visible';
-  if (paused) clearWatch(); else resume();
-});
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    paused = document.visibilityState !== 'visible';
+    if (paused) clearWatch(); else resume();
+  });
+}
 
 // Eingefroren oder manuell gesetzt heißt: GPS darf schlafen.
 export function freeze() {

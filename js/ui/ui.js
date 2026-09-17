@@ -45,7 +45,9 @@ export function toast(text, kind = '') {
     setTimeout(() => t.remove(), 260);
   }, kind === 'error' ? 4200 : 2400);
 }
-document.addEventListener('jetlag:toast', (e) => toast(e.detail.text, e.detail.kind || ''));
+if (typeof document !== 'undefined') {
+  document.addEventListener('jetlag:toast', (e) => toast(e.detail.text, e.detail.kind || ''));
+}
 
 /* ---------- Sheet ---------- */
 // build(body, close) füllt den Inhalt; Rückgabe darf ein Array von Fußzeilen-Buttons sein.

@@ -64,60 +64,71 @@ test('Größenabhängige Optionen sind richtig eingeschränkt', () => {
   }
 });
 
-// Registries aus dem Quelltext lesen: POI-Kategorien (benannte Orte) und
-// Bezugsobjekte (Geometrie für Vergleichsfragen).
+const Sources = await import('../js/sources.js');
+
 function registries() {
-  const src = readFileSync(join(ROOT, 'js/overpass.js'), 'utf8');
-  const poi = new Set([...src.matchAll(/\{ id: '([a-z_0-9]+)', *label: '[^']*', *filter:/g)].map((m) => m[1]));
-  const refs = new Set([...src.matchAll(/\{ id: '([a-z_0-9]+)', *label: '[^']*', *(?:q|from):/g)].map((m) => m[1]));
-  return { poi, refs };
+  return {
+    poi: new Set(Sources.POI_CATEGORIES.map((c) => c.id)),
+    refs: new Set(Sources.REFERENCES.map((r) => r.id)),
+  };
 }
 
-test('Jede OSM-Verknüpfung zeigt auf eine bekannte Kategorie', () => {
-  const { poi, refs } = registries();
-  assert.ok(poi.size > 15 && refs.size > 15, 'Registries nicht erkannt');
+// Welche Registry eine Option meint, hängt am Fragetyp: Vergleiche brauchen
+// Geometrie, Matching/Tentakel benannte Orte – außer die Quelle gibt es nur als Geometrie.
+function knownFor(q, o, reg) {
+  const typ = 'appType' in o ? o.appType : q.appType;
+  const ids = Array.isArray(o.osm) ? o.osm : [o.osm];
+  if (typ === 'compare') return ids.every((id) => reg.refs.has(id));
+  return ids.every((id) => reg.poi.has(id) || reg.refs.has(id));
+}
+
+test('Jede OSM-Verknüpfung zeigt auf eine bekannte Quelle', () => {
+  const reg = registries();
+  assert.ok(reg.poi.size > 20 && reg.refs.size > 30, 'Registries nicht geladen');
   for (const q of data.questions) {
     for (const o of q.options) {
       if (!o.osm) continue;
-      const liste = q.id === 'measuring' ? refs : poi;
-      assert.ok(liste.has(o.osm), `${q.id}/${o.label}: unbekannt "${o.osm}"`);
+      assert.ok(knownFor(q, o, reg), `${q.id}/${o.label}: unbekannt "${o.osm}"`);
     }
   }
 });
 
 // Der eigentliche Punkt: für keine Option darf die App nach einem Punkt fragen.
-// Entweder sie löst das Objekt selbst aus OpenStreetMap auf, oder die Option ist
-// ausdrücklich als "nur protokollieren" gekennzeichnet.
 test('Keine Option verlangt manuelle Eingaben', () => {
-  const { poi, refs } = registries();
+  const reg = registries();
   const offen = [];
   for (const q of data.questions) {
     for (const o of q.options) {
       const typ = 'appType' in o ? o.appType : q.appType;
       if (typ === null) {
-        // Ganze Kategorien ohne Kartenbezug (Fotos) brauchen keine Einzelbegründung;
-        // eine einzelne Ausnahme innerhalb einer geometrischen Kategorie schon.
-        if (q.appType !== null) {
-          assert.ok(o.note, `${q.id}/${o.label}: Ausnahme ohne Begründung`);
-        }
+        if (q.appType !== null) assert.ok(o.note, `${q.id}/${o.label}: Ausnahme ohne Begründung`);
         continue;
       }
-      // Radar und Thermometer arbeiten mit Distanzen um die eigene Position
-      if (typ === 'radius' || typ === 'thermo' || typ === 'area') continue;
-      const liste = q.id === 'measuring' ? refs : poi;
-      if (!o.osm || !liste.has(o.osm)) offen.push(`${q.id}/${o.label}`);
+      if (typ === 'radius' || typ === 'thermo' || typ === 'elevation') continue;
+      if (typ === 'area' && o.adminLevel) continue;
+      if (o.freeChoice) continue;
+      if (!o.osm || !knownFor(q, o, reg)) offen.push(`${q.id}/${o.label}`);
     }
   }
   assert.deepEqual(offen, [], `Ohne automatische Auflösung: ${offen.join(', ')}`);
 });
 
-test('Ausgedehnte Bezugsobjekte sind als Linie oder Fläche hinterlegt', () => {
-  const src = readFileSync(join(ROOT, 'js/overpass.js'), 'utf8');
-  for (const id of ['motorway', 'coastline', 'border_country', 'river', 'highspeed']) {
-    const zeile = src.split('\n').find((l) => l.includes(`id: '${id}'`));
-    assert.ok(zeile, `${id} fehlt`);
-    assert.ok(zeile.includes("geom: 'line'"), `${id} müsste als Linie gemessen werden`);
+test('Ausgedehnte Bezugsobjekte sind als Linie hinterlegt', () => {
+  for (const id of ['motorway', 'coastline', 'border_country', 'river', 'highspeed', 'stream', 'ferry', 'admin_border']) {
+    assert.equal(Sources.reference(id)?.geom, 'line', `${id} müsste als Linie gemessen werden`);
   }
+  for (const id of ['bus_route', 'tram_route', 'rail_route', 'subway_route']) {
+    assert.equal(Sources.reference(id)?.geom, 'lines', `${id} ist eine Linienrelation`);
+  }
+});
+
+test('Platzhalter in Abfragen werden aus der Regeloption gefüllt', () => {
+  const spec = Sources.reference('admin_border');
+  assert.deepEqual(Sources.referenceStatements(spec, { adminLevel: 9 }),
+    ['way["boundary"="administrative"]["admin_level"="9"]']);
+  assert.throws(() => Sources.referenceStatements(spec, {}), /adminLevel/);
+  // Vereinigung mehrerer Filter bleibt erhalten
+  assert.equal(Sources.poiStatements(Sources.poiCategory('tram_subway')).length, 2);
 });
 
 test('Deck ergibt die Kartenzahl der Quelle', () => {

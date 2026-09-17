@@ -5,41 +5,17 @@
 import { getState } from './state.js';
 import { areaBounds } from './constraints.js';
 import { bundleGet, bundleCovers } from './bundle.js';
-import { distance, formatDistance, simplify, destination, circle, distanceToFeatures } from './geo.js';
+import { distance, formatDistance, simplify, destination, circle, distanceToFeatures, pointInPolygon } from './geo.js';
 import { el, clear, openSheet, toast } from './ui/ui.js';
+import { POI_CATEGORIES, REFERENCES, poiCategory, reference, referenceStatements, poiStatements } from './sources.js';
+
+export { POI_CATEGORIES, REFERENCES, reference };
 
 // Reihenfolge = Vorzug. overpass.osm.jp fiel raus: ungültiges Zertifikat.
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-];
-
-export const CATEGORIES = [
-  { id: 'station',    label: 'Bahnhöfe',      filter: '["railway"="station"]' },
-  { id: 'tram',       label: 'Tram/U-Bahn',   filter: '["railway"~"^(tram_stop|subway_entrance)$"]' },
-  { id: 'bus',        label: 'Bushaltestellen', filter: '["highway"="bus_stop"]' },
-  { id: 'museum',     label: 'Museen',        filter: '["tourism"="museum"]' },
-  { id: 'park',       label: 'Parks',         filter: '["leisure"="park"]' },
-  { id: 'hospital',   label: 'Krankenhäuser', filter: '["amenity"="hospital"]' },
-  { id: 'worship',    label: 'Kirchen',       filter: '["amenity"="place_of_worship"]' },
-  { id: 'school',     label: 'Schulen',       filter: '["amenity"="school"]' },
-  { id: 'university', label: 'Hochschulen',   filter: '["amenity"="university"]' },
-  { id: 'library',    label: 'Bibliotheken',  filter: '["amenity"="library"]' },
-  { id: 'supermarket', label: 'Supermärkte',   filter: '["shop"="supermarket"]' },
-  { id: 'zoo',        label: 'Zoos',          filter: '["tourism"="zoo"]' },
-  { id: 'aquarium',   label: 'Aquarien',      filter: '["tourism"="aquarium"]' },
-  { id: 'theme_park', label: 'Freizeitparks', filter: '["tourism"="theme_park"]' },
-  { id: 'cinema',     label: 'Kinos',         filter: '["amenity"="cinema"]' },
-  { id: 'golf',       label: 'Golfplätze',    filter: '["leisure"="golf_course"]' },
-  { id: 'viewpoint',  label: 'Aussichtspunkte', filter: '["tourism"="viewpoint"]' },
-  { id: 'tower',      label: 'Türme',         filter: '["man_made"="tower"]' },
-  { id: 'peak',       label: 'Berggipfel',    filter: '["natural"="peak"]' },
-  { id: 'consulate',  label: 'Konsulate',     filter: '["diplomatic"~"consulate|embassy"]' },
-  { id: 'stadium',    label: 'Stadien',       filter: '["leisure"="stadium"]' },
-  { id: 'airport',    label: 'Flughäfen',     filter: '["aeroway"="aerodrome"]' },
-  { id: 'townhall',   label: 'Rathäuser',     filter: '["amenity"="townhall"]' },
-  { id: 'castle',     label: 'Burgen/Schlösser', filter: '["historic"="castle"]' },
 ];
 
 const cache = new Map();
@@ -131,9 +107,19 @@ function toPoints(json, { namedOnly = true } = {}) {
   });
 }
 
+function aroundUnion(statements, center, radiusM) {
+  const around = `(around:${Math.round(radiusM)},${center.lat.toFixed(6)},${center.lng.toFixed(6)})`;
+  return '(' + statements.map((st) => `${st}${around};`).join('') + ')';
+}
+
+function boxUnion(statements, bounds) {
+  const box = `(${bounds.south.toFixed(6)},${bounds.west.toFixed(6)},${bounds.north.toFixed(6)},${bounds.east.toFixed(6)})`;
+  return '(' + statements.map((st) => `${st}${box};`).join('') + ')';
+}
+
 export async function findPois(center, categoryId, radiusM, namedOnly = true) {
-  const cat = CATEGORIES.find((c) => c.id === categoryId);
-  if (!cat) throw new Error('Unbekannte Kategorie');
+  const cat = poiCategory(categoryId);
+  if (!cat) throw new Error(`Unbekannte Kategorie "${categoryId}"`);
 
   // Vorab geladene Daten kosten kein Netz und keine Wartezeit
   const vorrat = bundleCovers(center) ? await bundleGet(`pois/${categoryId}`) : null;
@@ -144,106 +130,124 @@ export async function findPois(center, categoryId, radiusM, namedOnly = true) {
       .sort((a, b) => a.distance - b.distance);
   }
   const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
-    + `nwr${cat.filter}(around:${Math.round(radiusM)},${center.lat.toFixed(6)},${center.lng.toFixed(6)});out center tags;`;
+    + `${aroundUnion(poiStatements(cat), center, radiusM)};out center tags;`;
   const json = await query(ql);
   return toPoints(json, { namedOnly })
     .map((p) => ({ ...p, distance: distance(center, p) }))
     .sort((a, b) => a.distance - b.distance);
 }
 
-/* ---------- Bezugsobjekte für Vergleichsfragen ---------- */
+/* ---------- Bezugsobjekte: Geometrie für Abstands- und Linienfragen ---------- */
 
 // Vergleichsfragen ("näher oder weiter als ich?") beziehen sich oft auf ausgedehnte
-// Objekte: Autobahnen, Grenzen, Küsten, Flüsse, Parks. Für die gibt es keinen
-// sinnvollen Punkt, den man von Hand setzen könnte – deshalb wird hier die echte
-// Geometrie geholt und der Abstand zum nächstgelegenen Punkt des Objekts gerechnet.
-// "ladder" ist die Suchradius-Leiter: klein anfangen, bis etwas gefunden wird.
+// Objekte: Autobahnen, Grenzen, Küsten, Flüsse, Buslinien. Dafür gibt es keinen
+// sinnvollen Punkt – deshalb wird die echte Geometrie geholt und der Abstand zum
+// nächstgelegenen Punkt des Objekts gerechnet. Die Registry steht in sources.js.
 const KM = 1000;
 
-function poiFilter(id) {
-  const c = CATEGORIES.find((x) => x.id === id);
-  return c ? `nwr${c.filter}` : null;
+const ROUTE_LABEL = { bus: 'Bus', tram: 'Tram', subway: 'U-Bahn', light_rail: 'Stadtbahn', train: 'Zug' };
+
+// Identität eines Objekts: gleiche Linie = gleicher Schlüssel, auch wenn OSM sie in
+// Hin- und Rückrichtung oder in viele Teilstücke zerlegt. Wichtig für Fragen der Art
+// "ist deine nächste Linie dieselbe wie meine?".
+function identityOf(e) {
+  const t = e.tags || {};
+  if (t.route) {
+    const nr = t.ref || t.name || `#${e.id}`;
+    return { key: `${t.route}:${nr}`, name: t.ref ? `${ROUTE_LABEL[t.route] || t.route} ${t.ref}` : (t.name || nr) };
+  }
+  const name = t.name || t.ref || t.int_ref || null;
+  return { key: name ? `n:${name}` : `${e.type}:${e.id}`, name };
 }
 
-export const REFERENCES = [
-  { id: 'motorway',      label: 'Autobahn',                  q: 'way["highway"="motorway"]', geom: 'line',  ladder: [3, 10, 30, 80, 200] },
-  { id: 'trunk',         label: 'Schnellstraße',             q: 'way["highway"~"^(motorway|trunk)$"]', geom: 'line', ladder: [3, 10, 30, 80] },
-  { id: 'rail',          label: 'Bahnstrecke',               q: 'way["railway"="rail"]["service"!~"."]', geom: 'line', ladder: [2, 8, 25, 80] },
-  { id: 'highspeed',     label: 'Schnellfahrstrecke',        q: 'way["railway"="rail"]["highspeed"="yes"]', geom: 'line', ladder: [10, 40, 120, 300] },
-  { id: 'border_country', label: 'Staatsgrenze',              q: 'way["boundary"="administrative"]["admin_level"="2"]', geom: 'line', ladder: [15, 50, 120, 300] },
-  { id: 'border_admin1', label: 'Grenze Verwaltungsebene 1', q: 'way["boundary"="administrative"]["admin_level"="4"]', geom: 'line', ladder: [8, 30, 90, 250] },
-  { id: 'border_admin2', label: 'Grenze Verwaltungsebene 2', q: 'way["boundary"="administrative"]["admin_level"="6"]', geom: 'line', ladder: [4, 15, 50, 150] },
-  { id: 'coastline',     label: 'Küstenlinie',               q: 'way["natural"="coastline"]', geom: 'line', ladder: [25, 60, 150, 350, 600] },
-  { id: 'river',         label: 'Fluss',                     q: 'way["waterway"="river"]', geom: 'line', ladder: [2, 8, 25, 80] },
-  { id: 'water',         label: 'Gewässer',                  q: 'nwr["natural"="water"]', geom: 'auto', ladder: [2, 8, 25, 80] },
-  { id: 'mountain',      label: 'Berg',                      q: 'node["natural"="peak"]', geom: 'point', ladder: [5, 20, 60, 180] },
-  { id: 'forest',        label: 'Wald',                      q: 'nwr["landuse"="forest"]', geom: 'auto', ladder: [2, 8, 25, 80] },
-  { id: 'consulate',     label: 'Ausländische Vertretung',   q: 'nwr["diplomatic"~"consulate|embassy"]', geom: 'auto', ladder: [10, 40, 120, 350] },
-  // aus der POI-Liste abgeleitet, damit die Filter nur an einer Stelle stehen
-  { id: 'airport',    label: 'Verkehrsflughafen', from: 'airport',    geom: 'auto', ladder: [10, 40, 120, 350] },
-  { id: 'station',    label: 'Bahnhof',           from: 'station',    geom: 'auto', ladder: [2, 8, 25, 80] },
-  { id: 'park',       label: 'Park',              from: 'park',       geom: 'auto', ladder: [1.5, 5, 15, 50] },
-  { id: 'museum',     label: 'Museum',            from: 'museum',     geom: 'auto', ladder: [2, 8, 25, 80] },
-  { id: 'cinema',     label: 'Kino',              from: 'cinema',     geom: 'auto', ladder: [3, 12, 40, 120] },
-  { id: 'hospital',   label: 'Krankenhaus',       from: 'hospital',   geom: 'auto', ladder: [3, 12, 40, 120] },
-  { id: 'library',    label: 'Bibliothek',        from: 'library',    geom: 'auto', ladder: [2, 8, 25, 80] },
-  { id: 'zoo',        label: 'Zoo',               from: 'zoo',        geom: 'auto', ladder: [10, 40, 120, 350] },
-  { id: 'aquarium',   label: 'Aquarium',          from: 'aquarium',   geom: 'auto', ladder: [10, 40, 120, 350] },
-  { id: 'theme_park', label: 'Freizeitpark',      from: 'theme_park', geom: 'auto', ladder: [10, 40, 120, 350] },
-  { id: 'golf',       label: 'Golfplatz',         from: 'golf',       geom: 'auto', ladder: [5, 20, 60, 180] },
-  { id: 'stadium',    label: 'Stadion',           from: 'stadium',    geom: 'auto', ladder: [5, 20, 60, 180] },
-  { id: 'worship',    label: 'Gotteshaus',        from: 'worship',    geom: 'auto', ladder: [1.5, 5, 15, 50] },
-];
-
-export function reference(id) {
-  return REFERENCES.find((r) => r.id === id) || null;
-}
-
-function elementToFeature(e, geomHint) {
-  if (e.type === 'node') return { type: 'point', points: [{ lat: e.lat, lng: e.lon }] };
+// Ein OSM-Element in Features zerlegen. Relationen vom Typ Linie ('lines') liefern
+// alle Mitgliedswege, Flächen werden zu einem Ring zusammengesetzt.
+function elementToFeatures(e, geomHint) {
+  if (e.type === 'node') return [{ type: 'point', points: [{ lat: e.lat, lng: e.lon }] }];
   if (e.type === 'way' && Array.isArray(e.geometry)) {
     const pts = e.geometry.map((g) => ({ lat: g.lat, lng: g.lon }));
-    if (pts.length < 2) return null;
+    if (pts.length < 2) return [];
     const first = pts[0], last = pts[pts.length - 1];
     const closed = Math.abs(first.lat - last.lat) < 1e-9 && Math.abs(first.lng - last.lng) < 1e-9;
-    const type = geomHint === 'line' ? 'line' : (closed ? 'polygon' : 'line');
-    return { type, points: closed && type === 'polygon' ? pts.slice(0, -1) : pts };
+    const linear = geomHint === 'line' || geomHint === 'lines';
+    const type = linear ? 'line' : (closed ? 'polygon' : 'line');
+    return [{ type, points: closed && type === 'polygon' ? pts.slice(0, -1) : pts }];
   }
   if (e.type === 'relation' && Array.isArray(e.members)) {
+    const ways = e.members.filter((m) => m.type === 'way' && Array.isArray(m.geometry) && m.geometry.length > 1);
+    if (geomHint === 'lines' || geomHint === 'line') {
+      return ways.map((m) => ({ type: 'line', points: m.geometry.map((g) => ({ lat: g.lat, lng: g.lon })) }));
+    }
     const ring = stitchOuterRing(e.members);
-    if (ring && ring.length >= 3) return { type: 'polygon', points: ring };
-    const line = e.members.find((m) => Array.isArray(m.geometry) && m.geometry.length > 1);
-    if (line) return { type: 'line', points: line.geometry.map((g) => ({ lat: g.lat, lng: g.lon })) };
+    if (ring && ring.length >= 3) return [{ type: 'polygon', points: ring }];
+    return ways.slice(0, 1).map((m) => ({ type: 'line', points: m.geometry.map((g) => ({ lat: g.lat, lng: g.lon })) }));
   }
-  return null;
+  return [];
 }
 
 function featuresFrom(json, spec, center) {
   const out = [];
   for (const e of json.elements || []) {
-    const f = elementToFeature(e, spec.geom);
-    if (!f || !f.points.length) continue;
-    // Autobahnen tragen ihre Nummer in "ref", nicht in "name"
-    f.name = e.tags?.name || e.tags?.ref || e.tags?.int_ref || null;
-    f.distance = distanceToFeatures(center, [f]);
-    out.push(f);
+    const id = identityOf(e);
+    for (const f of elementToFeatures(e, spec.geom)) {
+      if (!f.points.length) continue;
+      f.name = id.name;
+      f.key = id.key;
+      f.distance = distanceToFeatures(center, [f]);
+      out.push(f);
+    }
   }
   return out.sort((a, b) => a.distance - b.distance);
 }
 
-function aroundQuery(q, center, km, timeout) {
+function aroundQuery(statements, center, km, timeout) {
+  return `[out:json][timeout:${timeout}];${aroundUnion(statements, center, km * KM)};out geom 2000;`;
+}
+
+// Linienrelationen (Bus, Tram, Zug) reichen oft durch die halbe Region. Statt ihre
+// komplette Geometrie zu laden, werden die Relationen nur mit Mitgliederliste geholt
+// und davon ausschließlich die Wegstücke im benötigten Umkreis mit Koordinaten.
+function routeQuery(statements, center, km, coverM, timeout) {
+  const around = (r) => `(around:${Math.round(r)},${center.lat.toFixed(6)},${center.lng.toFixed(6)})`;
   return `[out:json][timeout:${timeout}];`
-    + `(${q}(around:${Math.round(km * KM)},${center.lat.toFixed(6)},${center.lng.toFixed(6)}););`
-    + 'out geom 2000;';
+    + `(${statements.map((st) => `${st}${around(km * KM)};`).join('')})->.routes;`
+    + '.routes out body;'
+    + `way(r.routes)${around(coverM)};out geom;`;
+}
+
+// Wegstücke ihren Linien zuordnen. Teilen sich zwei Linien ein Gleis, gehört das
+// Stück beiden – im Grenzfall sind sie dann eben gleich nah.
+function routeFeaturesFrom(json, center) {
+  const ways = new Map();
+  const routes = [];
+  for (const e of json.elements || []) {
+    if (e.type === 'way' && Array.isArray(e.geometry)) ways.set(e.id, e);
+    else if (e.type === 'relation') routes.push(e);
+  }
+  const out = [];
+  for (const rel of routes) {
+    const id = identityOf(rel);
+    for (const m of rel.members || []) {
+      if (m.type !== 'way') continue;
+      const w = ways.get(m.ref);
+      if (!w || w.geometry.length < 2) continue;
+      const f = { type: 'line', points: w.geometry.map((g) => ({ lat: g.lat, lng: g.lon })), name: id.name, key: id.key };
+      f.distance = distanceToFeatures(center, [f]);
+      out.push(f);
+    }
+  }
+  return out.sort((a, b) => a.distance - b.distance);
 }
 
 // OSM zerlegt lange Wege an jeder Kreuzung. Für Abstandsrechnung und Zeichnung sind
 // zusammenhängende Linien besser: weniger Zustand, weniger Zeichenoperationen je Bild.
+// Zusammengefügt wird nur, was zum selben Objekt gehört – sonst verschmölze die A 565
+// am Autobahnkreuz mit der A 59, und "dieselbe Autobahn?" wäre nicht mehr beantwortbar.
 function mergeLines(feats) {
   const lines = feats.filter((f) => f.type === 'line');
   const rest = feats.filter((f) => f.type !== 'line');
   const near = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
-  const pool = lines.map((f) => ({ points: f.points.slice(), name: f.name }));
+  const pool = lines.map((f) => ({ points: f.points.slice(), name: f.name, key: f.key }));
   const out = [];
 
   while (pool.length) {
@@ -252,19 +256,19 @@ function mergeLines(feats) {
     while (extended) {
       extended = false;
       for (let i = 0; i < pool.length; i++) {
+        if (pool[i].key !== cur.key) continue;
         const A = cur.points, B = pool[i].points;
         if (near(A[A.length - 1], B[0])) cur.points = A.concat(B.slice(1));
         else if (near(A[A.length - 1], B[B.length - 1])) cur.points = A.concat(B.slice().reverse().slice(1));
         else if (near(A[0], B[B.length - 1])) cur.points = B.slice(0, -1).concat(A);
         else if (near(A[0], B[0])) cur.points = B.slice().reverse().slice(0, -1).concat(A);
         else continue;
-        cur.name = cur.name || pool[i].name;
         pool.splice(i, 1);
         extended = true;
         break;
       }
     }
-    out.push({ type: 'line', name: cur.name, points: cur.points });
+    out.push({ type: 'line', name: cur.name, key: cur.key, points: cur.points });
   }
   return [...out, ...rest];
 }
@@ -281,69 +285,110 @@ function fitBudget(features, budget = 6000) {
   return out.map((f) => ({ ...f, points: f.points.length > 8 ? simplify(f.points, 0.0003) : f.points }));
 }
 
-// Bezugsobjekt samt Geometrie holen.
-//
-// Zwei Schritte, und der zweite ist der wichtige: Erst wird das nächstgelegene
-// Exemplar gesucht. Dann wird so weit nachgeladen, dass die Geometrie das ganze
-// Spielgebiet plus den gemessenen Abstand abdeckt – sonst läge ein Punkt am anderen
-// Ende des Gebiets scheinbar weit von der Autobahn weg, nur weil deren Teilstücke
-// dort nicht mitgeladen wurden. OSM zerlegt lange Wege in viele kurze Stücke.
-export async function findNearestFeatures(center, refId, { area = null, maxKm = null } = {}) {
+export function bundleKey(refId, params) {
+  const p = Object.entries(params || {}).map(([k, v]) => `${k}=${v}`).join(',');
+  return p ? `refs/${refId}@${p}` : `refs/${refId}`;
+}
+
+// Geometrie einer Referenz holen: erst das nächste Exemplar finden, dann so weit
+// nachladen, dass das ganze Spielgebiet plus der gemessene Abstand abgedeckt ist –
+// sonst läge ein Punkt am anderen Ende des Gebiets scheinbar weit vom Objekt weg,
+// nur weil dessen Teilstücke dort nicht mitgeladen wurden.
+async function loadReference(center, refId, { area = null, maxKm = null, params = {} } = {}) {
   const spec = reference(refId);
   if (!spec) throw new Error(`Unbekanntes Bezugsobjekt "${refId}"`);
-  const q = spec.q || poiFilter(spec.from);
-  if (!q) throw new Error(`Für "${spec.label}" ist keine Abfrage hinterlegt`);
+  if (spec.kind === 'elevation') throw new Error(`"${spec.label}" ist ein Höhenwert, keine Geometrie`);
+  const statements = referenceStatements(spec, params);
+  if (!statements.length) throw new Error(`Für "${spec.label}" ist keine Abfrage hinterlegt`);
   const timeout = getState().settings.overpassTimeout || 25;
 
-  const vorrat = bundleCovers(center) ? await bundleGet(`refs/${refId}`) : null;
+  const vorrat = bundleCovers(center) ? await bundleGet(bundleKey(refId, params)) : null;
   if (vorrat && vorrat.length) {
-    const sortiert = vorrat
-      .map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
-      .sort((a, b) => a.distance - b.distance);
     return {
-      label: spec.label, features: sortiert,
-      distance: sortiert[0].distance, name: sortiert[0].name,
-      coveredKm: null, offline: true,
+      spec,
+      feats: vorrat.map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
+        .sort((a, b) => a.distance - b.distance),
+      coveredKm: null,
+      offline: true,
     };
   }
 
-  // maxKm begrenzt die Suchleiter – beim Vorabladen soll eine 400 km entfernte
-  // Küste nicht das halbe Land herunterziehen.
-  const leiter = maxKm ? spec.ladder.filter((km) => km <= maxKm) : spec.ladder;
-  if (!leiter.length) {
-    throw new Error(`${spec.label}: liegt weiter als ${Math.round(maxKm)} km entfernt`);
+  // Bus- und Bahnlinien sind lokale Bezüge: "dieselbe nächste Tram?" ist in einem
+  // Stadtspiel sinnlos, wenn die nächste Tram 60 km entfernt fährt – und genau diese
+  // Stufen ziehen ganze Verkehrsnetze. Deshalb enden Linien-Suchen nahe am Gebiet.
+  let obergrenze = maxKm;
+  if (spec.geom === 'lines') {
+    const lokal = Math.max(8, (radiusToCover(center, area) / KM) * 3);
+    obergrenze = obergrenze ? Math.min(obergrenze, lokal) : lokal;
   }
+  const leiter = obergrenze ? spec.ladder.filter((km) => km <= obergrenze) : spec.ladder;
+  if (!leiter.length) throw new Error(`${spec.label}: liegt weiter als ${Math.round(obergrenze)} km entfernt`);
 
   let hitKm = null;
   let feats = [];
+  const flaeche = radiusToCover(center, area);
   for (const km of leiter) {
-    feats = featuresFrom(await query(aroundQuery(q, center, km, timeout)), spec, center);
+    feats = spec.geom === 'lines'
+      ? routeFeaturesFrom(await query(routeQuery(statements, center, km, (flaeche + km * KM) * 1.1, timeout)), center)
+      : featuresFrom(await query(aroundQuery(statements, center, km, timeout)), spec, center);
     if (feats.length) { hitKm = km; break; }
   }
-  if (!feats.length) {
-    throw new Error(`${spec.label}: nichts im Umkreis von ${leiter[leiter.length - 1]} km gefunden`);
-  }
+  if (!feats.length) throw new Error(`${spec.label}: nichts im Umkreis von ${leiter[leiter.length - 1]} km gefunden`);
 
-  const nearest = feats[0].distance;
-  const neededKm = (radiusToCover(center, area) + nearest) / KM * 1.1;
-  if (neededKm > hitKm) {
-    const wider = featuresFrom(await query(aroundQuery(q, center, Math.ceil(neededKm), timeout)), spec, center);
+  // Linienrelationen sind oben schon mit Gebietsabdeckung geladen
+  const neededKm = (flaeche + feats[0].distance) / KM * 1.1;
+  if (spec.geom !== 'lines' && neededKm > hitKm) {
+    const wider = featuresFrom(await query(aroundQuery(statements, center, Math.ceil(neededKm), timeout)), spec, center);
     if (wider.length) feats = wider;
   }
 
   const merged = mergeLines(feats)
     .map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
     .sort((a, b) => a.distance - b.distance);
-  const features = fitBudget(merged).map((f) => ({
-    type: f.type, name: f.name, distance: f.distance, points: f.points,
+  const slim = fitBudget(merged).map((f) => ({
+    type: f.type, name: f.name, key: f.key, distance: f.distance, points: f.points,
   }));
+  return { spec, feats: slim, coveredKm: Math.max(hitKm, Math.ceil(neededKm)), offline: false };
+}
+
+// Für Vergleichsfragen: alle Geometrie einer oder mehrerer Referenzen als ein Satz.
+// "Bus-, Bahn-, Zug-Linie oder Autobahn" ist eine Option mit mehreren Quellen –
+// gemessen wird dann zum nächsten Objekt irgendeiner davon.
+export async function findNearestFeatures(center, refIds, opts = {}) {
+  const ids = Array.isArray(refIds) ? refIds : [refIds];
+  // Quellen parallel laden; eine fehlende Quelle ("keine Stadtbahn hier") ist kein
+  // Fehler, solange eine andere etwas liefert
+  const settled = await Promise.allSettled(ids.map((id) => loadReference(center, id, opts)));
+  const results = settled.filter((x) => x.status === 'fulfilled').map((x) => x.value);
+  const fehler = settled.filter((x) => x.status === 'rejected').map((x) => x.reason);
+  if (!results.length) throw fehler[0] || new Error('Keine Geometrie gefunden');
+
+  const features = results.flatMap((r) => r.feats).sort((a, b) => a.distance - b.distance);
+  const label = results.map((r) => r.spec.label).join(' / ');
   return {
-    label: spec.label,
+    label,
     features,
     distance: features[0].distance,
     name: features[0].name,
-    coveredKm: Math.max(hitKm, Math.ceil(neededKm)),
+    coveredKm: Math.max(...results.map((r) => r.coveredKm || 0)) || null,
+    offline: results.every((r) => r.offline),
   };
+}
+
+// Für "ist dein nächstes X dasselbe wie meines?" bei Linien und Flächen: Objekte mit
+// Identität, jeweils alle zugehörigen Teilstücke gebündelt.
+export async function findCandidates(center, refIds, { limit = 40, ...opts } = {}) {
+  const res = await findNearestFeatures(center, refIds, opts);
+  const byKey = new Map();
+  for (const f of res.features) {
+    const key = f.key || `${f.type}:${f.points[0].lat},${f.points[0].lng}`;
+    if (!byKey.has(key)) byKey.set(key, { id: key, name: f.name || 'ohne Namen', features: [], distance: f.distance });
+    const c = byKey.get(key);
+    c.features.push({ type: f.type, points: f.points });
+    if (f.distance < c.distance) c.distance = f.distance;
+  }
+  const candidates = [...byKey.values()].sort((a, b) => a.distance - b.distance).slice(0, limit);
+  return { label: res.label, candidates, offline: res.offline };
 }
 
 // Wie weit reicht das Spielgebiet von hier aus? Danach richtet sich die Abdeckung.
@@ -503,6 +548,43 @@ export async function areaGeometry(cand) {
   return out;
 }
 
+// Gebiet einer bestimmten Verwaltungsebene am Standort – für Regeloptionen wie
+// "Stadtteil" oder "Gemeinde", ohne dass jemand aus einer Liste wählen muss.
+// Welche Ebene was bedeutet, ist regional verschieden (Bonn: 8 Stadt, 9 Stadtbezirk,
+// 10 Ortsteil) und steht deshalb im Regelwerk, nicht hier.
+export async function adminAreaAt(point, level) {
+  const vorrat = bundleCovers(point) ? await bundleGet(`admin/${level}`) : null;
+  if (vorrat) {
+    const hit = vorrat.find((a) => pointInPolygon(point, a.ring));
+    if (hit) return { ...hit, offline: true };
+  }
+  const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
+    + `is_in(${point.lat.toFixed(6)},${point.lng.toFixed(6)})->.a;`
+    + `relation(pivot.a)["boundary"="administrative"]["admin_level"="${level}"];out ids tags;`;
+  const json = await query(ql);
+  const rel = (json.elements || [])[0];
+  if (!rel) throw new Error(`Hier gibt es kein Gebiet der Verwaltungsebene ${level}`);
+  const ring = await areaGeometry({ type: 'relation', id: rel.id });
+  return { id: rel.id, name: rel.tags?.name || `Ebene ${level}`, level, ring, offline: false };
+}
+
+// Für das Vorabladen: alle Gebiete einer Ebene samt Umriss.
+export async function adminAreasInBox(bounds, level) {
+  const box = `(${bounds.south.toFixed(6)},${bounds.west.toFixed(6)},${bounds.north.toFixed(6)},${bounds.east.toFixed(6)})`;
+  const ql = `[out:json][timeout:60];relation["boundary"="administrative"]["admin_level"="${level}"]${box};out geom;`;
+  const json = await query(ql);
+  const out = [];
+  for (const e of json.elements || []) {
+    const ring = stitchOuterRing(e.members || []);
+    if (!ring || ring.length < 3) continue;
+    let eps = 0.00005;
+    let slim = simplify(ring, eps);
+    while (slim.length > 1200 && eps < 0.01) { eps *= 2; slim = simplify(ring, eps); }
+    out.push({ id: e.id, name: e.tags?.name || `Ebene ${level}`, level, ring: slim });
+  }
+  return out;
+}
+
 // Die Grenzwege einer Relation kommen unsortiert und teils verdreht.
 // Hier werden sie an den Endpunkten aneinandergehängt; von mehreren geschlossenen
 // Ringen (Exklaven) gewinnt der flächenmäßig größte.
@@ -544,11 +626,10 @@ function bboxArea(ring) {
 
 // Für das Vorabladen: alles in einem Rechteck statt im Umkreis eines Punktes.
 export async function poisInBox(bounds, categoryId, namedOnly = true) {
-  const cat = CATEGORIES.find((c) => c.id === categoryId);
-  if (!cat) throw new Error('Unbekannte Kategorie');
-  const box = `(${bounds.south.toFixed(6)},${bounds.west.toFixed(6)},${bounds.north.toFixed(6)},${bounds.east.toFixed(6)})`;
+  const cat = poiCategory(categoryId);
+  if (!cat) throw new Error(`Unbekannte Kategorie "${categoryId}"`);
   const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
-    + `nwr${cat.filter}${box};out center tags;`;
+    + `${boxUnion(poiStatements(cat), bounds)};out center tags;`;
   return toPoints(await query(ql), { namedOnly });
 }
 
@@ -598,7 +679,7 @@ export function poiSheet(center, onResult) {
   let category = 'station';
   let radius = 3000;
   openSheet('Orte im Umkreis laden', (body, close) => {
-    const cats = el('div', { class: 'pills' }, CATEGORIES.map((c) => el('button', {
+    const cats = el('div', { class: 'pills' }, POI_CATEGORIES.map((c) => el('button', {
       class: `pill ${c.id === category ? 'on' : ''}`,
       onclick: (e) => {
         category = c.id;

@@ -4,7 +4,7 @@
 // Statistik und Zufallspunkte laufen über allows(), nicht über die Pixel der Maske —
 // dadurch sind sie unabhängig von Zoom und Bildausschnitt.
 
-import { distance, bearing, circle, sector, bisector, pointInPolygon, formatDistance, distanceToFeatures } from './geo.js';
+import { distance, bearing, circle, sector, bisector, pointInPolygon, formatDistance, distanceToFeatures, distanceToRing, sampleGrid } from './geo.js';
 
 export const TYPES = {
   radius:  { label: 'Radius',        icon: '◎', color: '#38bdf8' },
@@ -13,7 +13,23 @@ export const TYPES = {
   area:    { label: 'Gebiet',        icon: '▱', color: '#34d399' },
   nearest: { label: 'Nächster Ort',  icon: '⌖', color: '#fbbf24' },
   sector:  { label: 'Richtung',      icon: '∡', color: '#f472b6' },
+  elevation: { label: 'Höhe',        icon: '⛰', color: '#22d3ee' },
 };
+
+// Antworten der Seite "A" – drin, wärmer, näher, ja. Die Gegenseite ist jeweils B.
+export const A_ANSWERS = new Set(['inside', 'warmer', 'closer', 'yes']);
+
+// Einheitliches Grenzfall-Modell für alle Fragetypen:
+// s ist ein vorzeichenbehafteter Abstand zur Grenze in Metern (s > 0: Antwort A).
+// Liegt ein Punkt innerhalb der Toleranz, gilt die Grenzfall-Regel des Regelwerks
+// (tieBreak), z. B. "Radius: drin". Wer dort steht, hätte also so geantwortet –
+// deshalb gehört das Toleranzband zur Seite der Grenzfall-Antwort.
+function sideA(c, s, zeroIsA) {
+  const tol = c.tieToleranceM || 0;
+  if (c.tieBreak && Math.abs(s) <= tol) return A_ANSWERS.has(c.tieBreak);
+  if (s === 0) return c.tieBreak ? A_ANSWERS.has(c.tieBreak) : zeroIsA;
+  return s > 0;
+}
 
 const BISECTOR_HALF_LENGTH = 250000; // m – deckt jeden realistischen Bildausschnitt ab
 const BISECTOR_SAMPLES = 49;
@@ -21,37 +37,34 @@ const BISECTOR_SAMPLES = 49;
 export function allows(c, p) {
   switch (c.type) {
     case 'radius': {
-      const inside = distance(p, c.center) <= c.radius;
-      return c.inside ? inside : !inside;
+      const s = c.radius - distance(p, c.center);
+      return sideA(c, s, true) === !!c.inside;
     }
     case 'thermo': {
       // "wärmer" = der gesuchte Punkt liegt näher am Endpunkt der Bewegung
-      const closerToEnd = distance(p, c.to) < distance(p, c.from);
-      return c.warmer ? closerToEnd : !closerToEnd;
+      const s = distance(p, c.from) - distance(p, c.to);
+      return sideA(c, s, false) === !!c.warmer;
     }
     case 'compare': {
-      const mine = compareDistance(c);
-      const theirs = refDistance(c, p);
-      return c.closer ? theirs < mine : theirs > mine;
+      const s = compareDistance(c) - refDistance(c, p);
+      return sideA(c, s, false) === !!c.closer;
     }
     case 'area': {
       const inside = pointInPolygon(p, c.ring);
-      return c.inside ? inside : !inside;
+      // Den Randabstand nur rechnen, wenn eine Toleranz ihn überhaupt braucht
+      const s = c.tieBreak && c.tieToleranceM > 0
+        ? (inside ? 1 : -1) * distanceToRing(p, c.ring)
+        : (inside ? 1 : -1);
+      return sideA(c, s, true) === !!c.inside;
     }
-    case 'nearest': {
-      // Für ein Argmin genügen quadrierte Abstände in lokaler Näherung – das spart
-      // die Trigonometrie der Haversine-Formel bei jeder einzelnen Stichprobe.
-      const mLng = 111319.49 * Math.cos(p.lat * Math.PI / 180);
-      let bestId = null, best = Infinity;
-      for (const o of c.pois) {
-        const dx = (o.lng - p.lng) * mLng, dy = (o.lat - p.lat) * 111319.49;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < best) { best = d2; bestId = o.id; }
-      }
-      if (bestId === null) return true;
-      const isNearest = bestId === c.chosenId;
-      // invert: "nein, mein nächstes X ist ein anderes" – dann fällt genau diese Zelle weg
-      return c.invert ? !isNearest : isNearest;
+    case 'nearest':
+      return nearestAllows(c, p);
+    case 'elevation': {
+      const h = sampleGrid(c.grid, p);
+      if (h == null) return true; // keine Höhe bekannt: nicht ausschließen
+      // "näher am Meeresspiegel" = geringerer Betrag der Höhe
+      const s = Math.abs(c.myElevation) - Math.abs(h);
+      return sideA(c, s, false) === !!c.closer;
     }
     case 'sector': {
       if (c.radius && distance(p, c.center) > c.radius) return !c.inside;
@@ -64,6 +77,86 @@ export function allows(c, p) {
     default:
       return true;
   }
+}
+
+// "Ist dein nächstes X dasselbe wie meines?" – X als Punkte (pois) oder als Objekte
+// mit Geometrie (candidates: Linien, Flächen). invert = Antwort "nein".
+function nearestAllows(c, p) {
+  const yes = !c.invert;
+
+  if (c.candidates) {
+    const chosen = c.candidates.find((x) => x.id === c.chosenId);
+    if (!chosen) return true;
+    const dChosen = distanceToFeatures(p, chosen.features);
+    // Andere Kandidaten nur so genau rechnen, wie es für die Entscheidung nötig ist
+    const limit = dChosen + (c.tieToleranceM || 0) + 1e-6;
+    let dOther = Infinity;
+    for (const cand of c.candidates) {
+      if (cand.id === c.chosenId) continue;
+      const d = distanceToFeatures(p, cand.features, Math.min(limit, dOther));
+      if (d < dOther) dOther = d;
+    }
+    return sideA(c, dOther - dChosen, true) === yes;
+  }
+
+  if (!c.pois || !c.pois.length) return true;
+  // Quadrierte lokale Abstände genügen fürs Argmin und sparen die Trigonometrie
+  const mLat = 111319.49;
+  const mLng = mLat * Math.cos(p.lat * Math.PI / 180);
+  let dChosen2 = Infinity, dOther2 = Infinity;
+  for (const o of c.pois) {
+    const dx = (o.lng - p.lng) * mLng, dy = (o.lat - p.lat) * mLat;
+    const d2 = dx * dx + dy * dy;
+    if (o.id === c.chosenId) dChosen2 = d2;
+    else if (d2 < dOther2) dOther2 = d2;
+  }
+  if (dChosen2 === Infinity) return true;
+  const s = Math.sqrt(dOther2) - Math.sqrt(dChosen2);
+  return sideA(c, s, true) === yes;
+}
+
+/* ---------- Raster für Fragen ohne geschlossene Form ---------- */
+
+// Linien-Voronoi ("nächste Buslinie") und Höhenlinien haben keine einfache Kontur.
+// Solche Constraints werden einmal auf ein Raster über dem Spielgebiet ausgewertet;
+// das Raster wird gecacht, Schwenken und Zoomen kosten danach nichts mehr.
+const rasterCache = new WeakMap();
+
+export function needsRaster(c) {
+  return c.type === 'elevation' || (c.type === 'nearest' && !!c.candidates);
+}
+
+export function rasterFor(c, bounds, cols = 100) {
+  const key = `${bounds.south.toFixed(5)},${bounds.west.toFixed(5)},${bounds.north.toFixed(5)},${bounds.east.toFixed(5)},${cols}`;
+  const hit = rasterCache.get(c);
+  if (hit && hit.key === key) return hit.raster;
+
+  const mid = (bounds.south + bounds.north) / 2;
+  const breite = distance({ lat: mid, lng: bounds.west }, { lat: mid, lng: bounds.east });
+  const hoehe = distance({ lat: bounds.south, lng: bounds.west }, { lat: bounds.north, lng: bounds.west });
+  const rows = Math.max(10, Math.min(260, Math.round(cols * hoehe / Math.max(1, breite))));
+  const dLat = (bounds.north - bounds.south) / rows;
+  const dLng = (bounds.east - bounds.west) / cols;
+  const bits = new Uint8Array(rows * cols);
+  for (let r = 0; r < rows; r++) {
+    const lat = bounds.south + (r + 0.5) * dLat;
+    for (let k = 0; k < cols; k++) {
+      bits[r * cols + k] = allows(c, { lat, lng: bounds.west + (k + 0.5) * dLng }) ? 0 : 1;
+    }
+  }
+  const raster = { ...bounds, rows, cols, bits };
+  rasterCache.set(c, { key, raster });
+  return raster;
+}
+
+function fallbackBounds(c) {
+  if (c.type === 'elevation' && c.grid) {
+    return { south: c.grid.south, north: c.grid.north, west: c.grid.west, east: c.grid.east };
+  }
+  const p = c.myPoint;
+  if (!p) return null;
+  const dLat = 15000 / 111320, dLng = 15000 / (111320 * Math.cos(p.lat * Math.PI / 180));
+  return { south: p.lat - dLat, north: p.lat + dLat, west: p.lng - dLng, east: p.lng + dLng };
 }
 
 // Abstand zum Bezugsobjekt: bei ausgedehnten Objekten (Autobahn, Küste, Grenze, Park)
@@ -81,7 +174,11 @@ export function compareDistance(c) {
 // Formen der AUSZUSCHLIESSENDEN Fläche.
 //   {kind:'ring', ring, exclude:'inside'|'outside'}
 //   {kind:'halfplane', line, excludeRef}  – excludeRef liegt auf der wegfallenden Seite
-export function shapes(c) {
+export function shapes(c, ctx = {}) {
+  if (needsRaster(c)) {
+    const b = ctx.bounds || fallbackBounds(c);
+    return b ? [{ kind: 'raster', raster: rasterFor(c, b, ctx.cols || 100) }] : [];
+  }
   switch (c.type) {
     case 'radius':
       return [{ kind: 'ring', ring: circle(c.center, c.radius), exclude: c.inside ? 'outside' : 'inside' }];
@@ -141,7 +238,14 @@ export function outline(c) {
     case 'thermo':
       return [{ kind: 'path', points: [c.from, c.to], arrow: true }, { kind: 'dot', at: c.from }, { kind: 'dot', at: c.to }];
     case 'nearest':
+      if (c.candidates) {
+        return c.candidates.flatMap((cand) => cand.features.map((f) => (f.type === 'point'
+          ? { kind: 'dot', at: f.points[0], strong: cand.id === c.chosenId }
+          : { kind: 'path', points: f.points, closed: f.type === 'polygon', strong: cand.id === c.chosenId, faint: cand.id !== c.chosenId })));
+      }
       return c.pois.map((p) => ({ kind: 'dot', at: p, strong: p.id === c.chosenId, label: p.name }));
+    case 'elevation':
+      return c.myPoint ? [{ kind: 'dot', at: c.myPoint, strong: true }] : [];
     case 'sector':
       return [{ kind: 'dot', at: c.center }];
     default:
@@ -161,12 +265,15 @@ export function describe(c, unit = 'metric') {
     case 'area':
       return `${c.inside ? 'In' : 'Nicht in'} ${c.name || 'Gebiet'}`;
     case 'nearest': {
-      const chosen = c.pois.find((x) => x.id === c.chosenId);
+      const liste = c.candidates || c.pois || [];
+      const chosen = liste.find((x) => x.id === c.chosenId);
       const name = chosen ? chosen.name : '?';
       return c.invert
-        ? `Nicht am nächsten an ${name} (von ${c.pois.length})`
-        : `Am nächsten an ${name} (von ${c.pois.length})`;
+        ? `Nicht am nächsten an ${name} (von ${liste.length})`
+        : `Am nächsten an ${name} (von ${liste.length})`;
     }
+    case 'elevation':
+      return `${c.closer ? 'Näher am' : 'Weiter vom'} Meeresspiegel als ${Math.round(c.myElevation)} m`;
     case 'sector':
       return `${c.inside ? 'Richtung' : 'Nicht Richtung'} ${Math.round(c.from)}°–${Math.round(c.to)}°`;
     default:
@@ -178,7 +285,7 @@ export function describe(c, unit = 'metric') {
 // eine Vergleichsfrage gegen eine Autobahn ein paar hundert. Wenn die billige
 // den Punkt schon ausschließt, muss die teure gar nicht mehr laufen.
 function isCheap(c) {
-  if (c.type === 'radius' || c.type === 'thermo' || c.type === 'sector') return true;
+  if (c.type === 'radius' || c.type === 'thermo' || c.type === 'sector' || c.type === 'elevation') return true;
   if (c.type === 'compare') return !(c.features && c.features.length);
   return false;
 }

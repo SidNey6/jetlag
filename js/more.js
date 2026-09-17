@@ -15,6 +15,8 @@ import { bundleMeta, bundleStats, clearBundle } from './bundle.js';
 import { prepareArea, planSteps, estimateTiles } from './prefetch.js';
 import { exportText } from './rounds.js';
 import * as Rules from './rules.js';
+import { zoneSummary } from './zone.js';
+import { PHASE_LABEL } from './phases.js';
 import { createTimer } from './timers.js';
 
 export function render() {
@@ -390,7 +392,7 @@ function rulesCard() {
       `${size.description} · ${size.typicalDuration || ''}`) : null,
     size ? el('table', { class: 'scores' },
       el('tr', {}, el('td', { text: 'Versteckzeit' }), el('td', { class: 'num mono', text: `${size.hidingPeriodMinutes} Min` })),
-      el('tr', {}, el('td', { text: 'Versteckzone' }), el('td', { class: 'num mono', text: formatDistance(size.hidingZoneRadiusM, unit) })),
+      el('tr', {}, el('td', { text: 'Versteckzone' }), el('td', { class: 'num mono', text: zoneSummary(size.hidingZoneRadiusM) })),
       el('tr', {}, el('td', { text: 'Antwortfrist' }), el('td', { class: 'num mono', text: `${size.answerMinutes} Min` })),
       el('tr', {}, el('td', { text: 'Fotofrist' }), el('td', { class: 'num mono', text: `${size.photoMinutes || size.answerMinutes} Min` }))) : null,
 
@@ -443,13 +445,50 @@ function openRulesOverview() {
           : 'In dieser Spielgröße nicht verfügbar' })));
     }
     const r = rules.round || {};
+
+    const fristen = Rules.deadlines();
+    if (fristen.length) {
+      body.append(el('div', { class: 'card' },
+        el('div', { class: 'card-title', text: 'Fristen' }),
+        ...fristen.map((d) => el('div', { class: 'card-sub', text:
+          `${d.label || d.id}: ${Math.floor(d.afterMinutes / 60) ? Math.floor(d.afterMinutes / 60) + ' h ' : ''}${d.afterMinutes % 60 ? (d.afterMinutes % 60) + ' min ' : ''}ab „${PHASE_LABEL[d.from || 'roundStart']}", bis „${PHASE_LABEL[d.until]}" → ${d.outcomeLabel || d.outcome || 'Hinweis'}` }))));
+    }
+    const la = Rules.lateAnswerRules();
+    if (la) {
+      body.append(el('div', { class: 'card' },
+        el('div', { class: 'card-title', text: 'Verspätete Antworten' }),
+        ...(la.steps || []).map((st) => el('div', { class: 'card-sub', text:
+          `${st.overMinutes ? `ab ${st.overMinutes} min` : 'jede Verspätung'}: `
+          + (st.label || (st.nextQuestionFree ? 'nächste Frage gratis' : `${st.nextDrawDelta || 0} Karten bei der nächsten Frage`)) })),
+        la.deductOvertimeFactor ? el('div', { class: 'card-sub', text: `Überzogene Zeit zählt ${String(la.deductOvertimeFactor).replace('.', ',')}-fach als Abzug.` }) : null,
+        la.exemptionNote ? el('div', { class: 'hint', text: la.exemptionNote }) : null));
+    }
+    const ties = Rules.categories().filter((q) => q.tieBreak);
+    if (ties.length) {
+      const tol = Rules.tieToleranceM();
+      body.append(el('div', { class: 'card' },
+        el('div', { class: 'card-title', text: 'Grenzfälle' }),
+        el('div', { class: 'card-sub', text: ties.map((q) => `${q.label}: ${Rules.TIE_LABEL[q.tieBreak]}`).join(' · ') }),
+        tol ? el('div', { class: 'hint', text: `Als Grenzfall gilt alles innerhalb von ${formatDistance(tol, unit)}.` }) : null));
+    }
+    for (const b of Rules.textBlocks()) {
+      body.append(el('div', { class: 'card' },
+        el('div', { class: 'card-title', text: b.title }),
+        ...b.chips.filter((c) => c.items.length).map((c) => el('div', {},
+          el('div', { class: 'hint', text: c.label }),
+          el('div', { class: 'pills' }, c.items.map((it) => el('span', {
+            class: 'pill', style: { borderColor: c.kind === 'no' ? '#5b2b34' : '#1f5140' },
+          }, it))))),
+        ...b.rules.map((t) => el('div', { class: 'card-sub', text: `• ${t}` }))));
+    }
+
     body.append(el('div', { class: 'card' },
       el('div', { class: 'card-title', text: 'Runde' }),
       el('div', { class: 'card-sub', text: [
         r.handLimit ? `Handlimit ${r.handLimit} Karten` : null,
         r.foundLabel ? `Gefunden: ${r.foundLabel}` : null,
         r.roundChangeMinutes ? `Rundenwechsel: ${r.roundChangeMinutes} Min Vorlauf` : null,
-        r.scoringLabel,
+        r.scoringLabel || (r.scoring === 'totalTime' ? 'Wertung: Summe aller Runden' : 'Wertung: längste einzelne Runde'),
         r.repeatQuestionNote,
       ].filter(Boolean).join('\n') })));
     const d = rules.deck;
@@ -551,7 +590,8 @@ async function offlineCard() {
   const zeilen = [];
   if (meta) {
     const z = meta.zaehler || {};
-    zeilen.push(`${z.pois || 0} Orte · ${z.refs || 0} Geometrien · ${z.orte || 0} Gebiete`);
+    zeilen.push(`${z.pois || 0} Orte · ${z.refs || 0} Geometrien · ${z.orte || 0} Gebiete`
+      + (z.gebiete ? ` · ${z.gebiete} Verwaltungsumrisse` : '') + (z.hoehe ? ` · ${z.hoehe} Höhenpunkte` : ''));
     zeilen.push(`${kacheln.count} Kartenkacheln · ${formatBytes(vorrat.bytes)} Daten`);
     zeilen.push(`vorbereitet am ${new Date(meta.at).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}`);
     if (meta.fehler?.length) zeilen.push(`${meta.fehler.length} Abfragen fehlgeschlagen`);
@@ -604,9 +644,12 @@ function openPrepareSheet() {
     function refresh() {
       const p = planSteps(area, { withTiles, zoomExtra });
       const k = withTiles ? estimateTiles(area, zoomExtra) : 0;
-      info.textContent = `${p.pois.length} Ortskategorien · ${p.refs.length} Bezugsobjekte · 1 Gebietsliste`
+      info.textContent = `${p.pois.length} Ortskategorien · ${p.refs.length} Bezugsobjekte`
+        + (p.adminLevels.length ? ` · ${p.adminLevels.length} Verwaltungsebenen` : '')
+        + (p.elevation ? ' · Geländehöhen' : '')
+        + ' · 1 Gebietsliste'
         + (withTiles ? ` · ${k} Kacheln (grob ${Math.round(k * 18 / 1024)} MB)` : '');
-      const sekunden = Math.round((p.pois.length + p.refs.length + 1) * 2.5 + (withTiles ? k / 12 : 0));
+      const sekunden = Math.round((p.schritte - (withTiles ? 1 : 0)) * 2.5 + (withTiles ? k / 12 : 0));
       status.textContent = `Dauer grob ${Math.max(1, Math.round(sekunden / 60))} Minuten. Zwischen den Abfragen wird bewusst gewartet – die OpenStreetMap-Server sind gespendet.`;
     }
 

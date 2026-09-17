@@ -10,11 +10,12 @@ import * as Rounds from './rounds.js';
 import * as More from './more.js';
 import { consumeHash } from './share.js';
 import * as Rules from './rules.js';
+import * as Zone from './zone.js';
 import { initBundle } from './bundle.js';
 import { el, openSheet, promptSheet, toast } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.4.0';
+window.__JL_VERSION__ = 'v1.5.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -108,7 +109,8 @@ function pointMenu(p) {
       action('⌖ Als meine Position setzen', () => { Loc.setManual(p); MapMod.render(); toast('Position manuell gesetzt'); syncLocButtons(); }),
       action('◎ Radius-Frage von hier', () => Q.openQuestionForm('radius', null, { at: p })),
       action('▦ Spielgebiet um diesen Punkt', () => More.openAreaSheet()),
-      action(`⭕ Versteckzone hier${zoneLabel()}`, () => setHidingZone(p)),
+      action(`⭕ Versteckzone hier${zoneLabel()}`, () => Zone.setHidingZone(p)),
+      action('📌 Versteckpunkt hier', () => Zone.setHidingSpot(p)),
       action('📋 Koordinaten kopieren', async () => {
         try { await navigator.clipboard.writeText(`${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`); toast('Kopiert', 'ok'); }
         catch (e) { toast('Kopieren nicht erlaubt', 'error'); }
@@ -120,17 +122,7 @@ function pointMenu(p) {
 
 function zoneLabel() {
   const r = Rules.hidingZoneRadius();
-  return r ? ` (${formatDistance(r, getState().settings.unit)})` : '';
-}
-
-// Versteckzone: der Kreis um die Station, in dem sich der Versteckende bewegen darf.
-// Radius kommt aus dem Regelwerk und hängt an der Spielgröße.
-function setHidingZone(p) {
-  const radius = Rules.hidingZoneRadius();
-  if (!radius) { toast('Kein Regelwerk geladen', 'error'); return; }
-  update((s) => { s.hidingZone = { lat: p.lat, lng: p.lng, radius, name: 'Versteckzone' }; }, 'Versteckzone gesetzt');
-  MapMod.render();
-  toast(`Versteckzone: ${formatDistance(radius, getState().settings.unit)}`, 'ok');
+  return r ? ` (${Zone.zoneSummary(r)})` : '';
 }
 
 function syncLocButtons() {

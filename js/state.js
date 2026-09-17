@@ -22,6 +22,7 @@ export function emptyState() {
     gameSize: 'medium',
     area: null,
     hidingZone: null,
+    hidingSpot: null,
     constraints: [],
     markers: [],
     pois: [],

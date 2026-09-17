@@ -63,6 +63,7 @@ export function createMask(L, map, opts = {}) {
       pts: (s.ring || s.line || []).map((p) => map.project(p, zoom)),
       ref: s.excludeRef ? map.project(s.excludeRef, zoom) : null,
       radiusM: s.radiusM,
+      raster: s.raster ? projectRaster(s.raster, zoom) : null,
       features: (s.features || []).map((f) => ({
         type: f.type,
         pts: (f.points || []).map((p) => map.project(p, zoom)),
@@ -75,6 +76,11 @@ export function createMask(L, map, opts = {}) {
     // Umgebendes Rechteck je Form – damit außerhalb des Bildausschnitts liegende
     // Formen gar nicht erst gezeichnet werden.
     for (const it of items) {
+      if (it.raster) {
+        const r = it.raster;
+        it.box = { x0: r.xs[0], x1: r.xs[r.xs.length - 1], y0: r.ys[r.ys.length - 1], y1: r.ys[0] };
+        continue;
+      }
       const all = it.features && it.features.length
         ? it.features.flatMap((f) => f.pts)
         : it.pts;
@@ -89,6 +95,35 @@ export function createMask(L, map, opts = {}) {
     }
     projCache = { zoom, items };
     return items;
+  }
+
+  // Mercator ist trennbar: x hängt nur von der Länge, y nur von der Breite ab.
+  // Deshalb reichen je eine Kantenliste für Spalten und Zeilen.
+  function projectRaster(r, zoom) {
+    const xs = new Float64Array(r.cols + 1);
+    const ys = new Float64Array(r.rows + 1);
+    const mid = (r.south + r.north) / 2;
+    for (let k = 0; k <= r.cols; k++) xs[k] = map.project([mid, r.west + (k / r.cols) * (r.east - r.west)], zoom).x;
+    for (let j = 0; j <= r.rows; j++) ys[j] = map.project([r.south + (j / r.rows) * (r.north - r.south), r.west], zoom).y;
+    return { rows: r.rows, cols: r.cols, bits: r.bits, xs, ys };
+  }
+
+  // Ausgeschlossene Zellen zeilenweise zu Streifen zusammenfassen – ein fillRect je
+  // Streifen statt je Zelle.
+  function drawRaster(ctx, r, origin) {
+    for (let j = 0; j < r.rows; j++) {
+      const yTop = r.ys[j + 1] - origin.y;
+      const h = r.ys[j] - r.ys[j + 1];
+      if (yTop > size.y || yTop + h < 0) continue;
+      let k = 0;
+      const row = j * r.cols;
+      while (k < r.cols) {
+        if (!r.bits[row + k]) { k++; continue; }
+        const start = k;
+        while (k < r.cols && r.bits[row + k]) k++;
+        ctx.fillRect(r.xs[start] - origin.x, yTop, r.xs[k] - r.xs[start], h + 0.5);
+      }
+    }
   }
 
   function boxOf(pts) {
@@ -204,11 +239,20 @@ export function createMask(L, map, opts = {}) {
     mctx.fillStyle = MASK_COLOR;
 
     for (const item of projectAll()) {
-      const hatGeometrie = item.pts.length || (item.parts && item.parts.length) || (item.features && item.features.length);
+      const hatGeometrie = item.pts.length || item.raster || (item.parts && item.parts.length) || (item.features && item.features.length);
       if (!hatGeometrie) continue;
 
       // Halbebenen und Ausstanzungen reichen über den Rand hinaus – die lassen sich
       // nicht am Rechteck prüfen. Alles andere schon.
+      if (item.kind === 'raster') {
+        const b = item.box;
+        if (b.x1 < org.x || b.x0 > org.x + size.x || b.y1 < org.y || b.y0 > org.y + size.y) continue;
+        mctx.globalCompositeOperation = 'source-over';
+        mctx.fillStyle = MASK_COLOR;
+        drawRaster(mctx, item.raster, org);
+        continue;
+      }
+
       if (item.box && (item.kind === 'ring' || item.kind === 'buffer')) {
         const pad = item.kind === 'buffer' ? item.radiusM * pxPerM : 0;
         const sichtbar = !(item.box.x1 + pad < org.x || item.box.x0 - pad > org.x + size.x

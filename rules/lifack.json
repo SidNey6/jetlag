@@ -1,7 +1,8 @@
 {
+  "schemaVersion": 2,
   "id": "lifack-hide-and-seek",
   "name": "Hide and Seek (lifack.ch)",
-  "version": "2026-09-15",
+  "version": "2026-09-17",
   "source": "https://www.lifack.ch/docs/quick_start_guide/",
   "sourceNote": "Werte übernommen von lifack.ch, einer inoffiziellen Fan-Umsetzung von Jet Lag: Hide and Seek. Nicht mit Jet Lag, Nebula oder Wendover Productions verbunden. Originalmaße sind Meilen; hier in Metern hinterlegt, damit die App rechnen kann.",
   "unitsOfOrigin": "imperial",
@@ -48,8 +49,45 @@
     "scoring": "longestSingleRound",
     "scoringLabel": "Es gewinnt die längste einzelne Versteckrunde, nicht die Summe",
     "repeatQuestionCostMultiplies": true,
-    "repeatQuestionNote": "Eine schon gestellte Frage kostet beim zweiten Mal doppelt, beim dritten dreifach usw. Die Züge werden einzeln ausgeführt, nicht zusammengelegt.",
-    "streetViewForbidden": true
+    "repeatQuestionNote": "Eine schon gestellte Frage kostet beim zweiten Mal doppelt, beim dritten dreifach usw. Die Züge werden einzeln ausgeführt, nicht zusammengelegt."
+  },
+  "hidingZone": {
+    "lockAt": "hidingEnd",
+    "rules": [
+      "Am Ende der Versteckzeit muss der Versteckende an einer Haltestelle oder Station im Spielgebiet stehen – sie ist der Mittelpunkt der Versteckzone.",
+      "Nach der Versteckzeit darf die Versteckzone bis zum Endgame nicht mehr verlassen werden, innerhalb ist Bewegung frei."
+    ]
+  },
+  "endgame": {
+    "trigger": "Die Suchenden haben die Versteckzone betreten und sind nicht mehr in einem Verkehrsmittel.",
+    "hiderMayMove": false,
+    "rules": [
+      "Das Endgame beginnt, sobald die Suchenden in der Versteckzone und nicht mehr in einem Verkehrsmittel sind.",
+      "Der Versteckende bleibt an einem öffentlich zugänglichen Versteck, bis er gefunden wird.",
+      "Ist eine Frage wegen der Bewegungseinschränkung nicht beantwortbar, ist „kann ich nicht beantworten\" gültig – es wird trotzdem gezogen."
+    ]
+  },
+  "answering": {
+    "rules": [
+      "Fragen müssen wahrheitsgemäß innerhalb der Frist beantwortet werden."
+    ]
+  },
+  "transport": {
+    "allowed": [
+      "zu Fuß",
+      "öffentlicher Nahverkehr"
+    ],
+    "rules": [
+      "Während der Versteckzeit darf der Versteckende zu Fuß und mit öffentlichen Verkehrsmitteln zu jeder Station im Spielgebiet fahren."
+    ]
+  },
+  "research": {
+    "forbidden": [
+      "Google Street View"
+    ],
+    "rules": [
+      "Jede Internetrecherche ist erlaubt – außer Google Street View."
+    ]
   },
   "questions": [
     {
@@ -270,7 +308,8 @@
           ],
           "osm": "consulate"
         }
-      ]
+      ],
+      "nearestMode": "same"
     },
     {
       "id": "measuring",
@@ -350,8 +389,7 @@
             "medium",
             "large"
           ],
-          "appType": null,
-          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
+          "appType": "elevation"
         },
         {
           "label": "Gewässer",
@@ -710,7 +748,8 @@
           ],
           "osm": "theme_park"
         }
-      ]
+      ],
+      "nearestMode": "which"
     },
     {
       "id": "photos",
