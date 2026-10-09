@@ -86,6 +86,13 @@ export function boundsInside(outer, inner) {
   return inner.south >= outer.south && inner.north <= outer.north && inner.west >= outer.west && inner.east <= outer.east;
 }
 
+// Abstand eines Punktes zum nächsten Rand der Region in Metern
+export function edgeDistance(region, p) {
+  const b = region.bounds;
+  const mLat = 111320, mLng = 111320 * Math.cos(p.lat * Math.PI / 180);
+  return Math.max(0, Math.min((p.lat - b.south) * mLat, (b.north - p.lat) * mLat, (p.lng - b.west) * mLng, (b.east - p.lng) * mLng));
+}
+
 export function regionAt(point) {
   return point ? regions.find((r) => contains(r.bounds, point)) || null : null;
 }
@@ -100,6 +107,11 @@ export function regionForBounds(b) {
 
 export function has(region, path) {
   return !!(region && region.files && path in region.files);
+}
+
+// In der Region gebaut, aber leer – z. B. U-Bahn-Linien in Bonn
+export function knownEmpty(region, path) {
+  return !!(region && Array.isArray(region.empty) && region.empty.includes(path));
 }
 
 /* ---------- Dateien ---------- */
@@ -158,7 +170,7 @@ export function decode(path, data) {
     return data.ways.map((w) => {
       const pts = [];
       for (let i = 0; i < w.c.length; i += 2) pts.push([w.c[i], w.c[i + 1]]);
-      return { id: w.id, nodes: null, pts, h: w.h };
+      return { id: w.id, nodes: null, pts, h: w.h, name: w.n || null };
     });
   }
   if (path === 'areas') return data.items;

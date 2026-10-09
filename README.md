@@ -177,6 +177,22 @@ App rechnet und zeigt durchgehend in Metern und Kilometern.
 | Mittel | 60 Min | 400 m | 5 Min | 10 Min |
 | Groß | 180 Min | 800 m | 5 Min | 20 Min |
 
+Jede Option wird ausgewertet, keine ist mehr „nur Protokoll":
+
+| Option | Auswertung über OpenStreetMap |
+|---|---|
+| Matching: Verkehrslinie | nächste Bus-, Tram-, U-Bahn- oder Zuglinie, nach Liniennummer |
+| Matching: Länge des Stationsnamens | alle Stationen mit gleich langem Namen (Buchstaben und Ziffern) |
+| Matching: Straße oder Weg | nächste benannte Straße im Umkreis von 1,5 km |
+| Matching: Landmasse | Inseln (Grafenwerth, Nonnenwerth, Herseler Werth …) gegen Festland |
+| Tentacles: Metrolinien | Straßen- und U-Bahn-Linien im Umkreis |
+| Photos | zeigt die Orte der passenden Art im Restgebiet – Kirchen, Parks, Supermärkte, Restaurants, Bahnsteige, Türme, Berge, Seen |
+
+Wo nur ein Nahbereich geladen wird (Straßen) oder eine Liste abgeschnitten ist, wirkt die
+Frage nur dort, wo das Ergebnis sicher ist; weiter weg schließt sie nichts aus, statt
+womöglich das Falsche auszuschließen. Fotos ohne passende Ortsart (Himmel, Baum, du selbst)
+starten nur Frist und Protokoll.
+
 Ergänzt sind Matching-Fragen, die lifack.ch nicht hat: **Flussseite**, **Autobahn** und
 **Landstraße** („Ist deine nächste Autobahn dieselbe wie meine?"). Straßen erkennt die App an
 ihrer Nummer – die B 9 bleibt die B 9, auch wenn sie in Bonn mal Adenauerallee und mal

@@ -7,10 +7,10 @@ import * as Loc from './location.js';
 import * as MapMod from './map.js';
 import { distance, formatDistance, bearing } from './geo.js';
 import { el, clear, append, openSheet, confirmSheet, toast, segmented, formatTime, icon, button, iconButton } from './ui/ui.js';
-import { poiSheet, areaPickerSheet, findPois, findNearestFeatures, findCandidates, findSideCandidates, adminAreaAt, REFERENCES, POI_CATEGORIES } from './overpass.js';
+import { poiSheet, areaPickerSheet, findPois, findPoisCovering, findNearestFeatures, findCandidates, findSideCandidates, adminAreaAt, REFERENCES, POI_CATEGORIES } from './overpass.js';
 import { poiCategory, reference, SIDE_REFERENCES } from './sources.js';
 import { elevationGridFor, fetchElevationAt } from './elevation.js';
-import { sampleGrid, sideOfLines } from './geo.js';
+import { sampleGrid, sideOfLines, pointInPolygon } from './geo.js';
 import * as Rules from './rules.js';
 import { createTimer } from './timers.js';
 import { logNote } from './rounds.js';
@@ -160,8 +160,10 @@ export function openRuleOptions(cat) {
         typ === 'elevation' ? 'Geländehöhe' : null,
         o.adminLevel ? `Verwaltungsebene ${o.adminLevel}` : null,
         typ === 'side' ? 'Seite des Gewässers' : null,
-        quellen.length > 1 ? `${quellen.length} Quellen` : (quellen.length ? 'aus OpenStreetMap' : null),
-        typ === null ? 'nur Protokoll' : null,
+        typ !== 'photo' && quellen.length > 1 ? `${quellen.length} Quellen` : (typ !== 'photo' && quellen.length ? 'aus OpenStreetMap' : null),
+        typ === 'photo' ? (quellen.length ? 'Foto · passende Orte im Restgebiet' : 'Foto mit Frist') : null,
+        o.matchBy === 'nameLength' ? 'Länge des Stationsnamens' : null,
+        typ === null ? 'ohne Kartenauswertung' : null,
       ].filter(Boolean).join(' · ');
       append(body, el('button', {
         class: 'card',
@@ -192,6 +194,13 @@ export function startRuleQuestion(cat, option) {
   if (folge) toast(`Wegen verspäteter Antwort: ${zug}`, 'ok');
 
   const type = 'appType' in option ? option.appType : cat.appType;
+  if (type === 'photo') {
+    document.dispatchEvent(new CustomEvent('jetlag:changed'));
+    const quellen = Rules.optionSources(option);
+    if (quellen.length) openPhotoPlaces(option, quellen);
+    else toast(`Foto angefragt. ${zug}${minutes ? `, ${minutes} Min Frist` : ''}`, 'ok');
+    return;
+  }
   if (!type) {
     toast(`Notiert. ${zug}${minutes ? `, ${minutes} Min` : ''}`, 'ok');
     document.dispatchEvent(new CustomEvent('jetlag:changed'));
@@ -205,6 +214,7 @@ export function startRuleQuestion(cat, option) {
     poiRadius: option.meters,
     adminLevel: option.adminLevel,
     match: option.match,
+    matchBy: option.matchBy,
     mode: type === 'nearest' ? Rules.nearestMode(cat.id) : null,
     ruleLabel: `${cat.label}: ${option.label}`,
     tieBreak: Rules.tieBreak(cat.id),
@@ -269,7 +279,10 @@ export function openQuestionForm(type, existing = null, prefill = null) {
     radius: radiusForm, thermo: thermoForm, compare: compareForm, area: areaForm,
     nearest: nearestForm, sector: sectorForm, elevation: elevationForm, side: sideForm,
   };
-  const build = builders[type];
+  // Sonderformen derselben Fragetypen: Namenslänge (Gruppe von Stationen), Landmasse (Inseln)
+  let build = builders[type];
+  if (type === 'nearest' && (prefill?.matchBy === 'nameLength' || existing?.matchBy === 'nameLength')) build = nameLengthForm;
+  if (type === 'area' && ((prefill?.sources || []).includes('island') || existing?.landmass)) build = landmassForm;
   if (!build) return;
   openSheet(existing ? 'Frage bearbeiten' : C.TYPES[type].label, (body, close) => {
     const form = build(body, existing, prefill);
@@ -594,6 +607,7 @@ function nearestForm(body, existing, prefill) {
   let candidates = existing?.candidates || null;
   let chosenId = existing?.chosenId || null;
   let invert = existing?.invert ?? false;
+  let cutoff = existing?.cutoff || null;
   // "same": ist dein nächstes X dasselbe wie meines? – "which": welchem X bist du am nächsten?
   const same = prefill?.mode === 'same' || !!prefill?.matching || existing?.mode === 'same';
   const sources = prefill?.sources || [];
@@ -614,12 +628,17 @@ function nearestForm(body, existing, prefill) {
       list.append(el('div', { class: 'hint', text: 'Noch keine Orte geladen.' }));
       return;
     }
-    for (const p of liste) {
+    // Bei dichten Quellen (Straßen, Buslinien) nur die nächsten zur Auswahl zeigen;
+    // ausgewertet wird trotzdem gegen alle
+    const zeigen = liste.slice(0, 20);
+    if (chosenId && !zeigen.some((p) => p.id === chosenId)) zeigen.push(liste.find((p) => p.id === chosenId));
+    for (const p of zeigen.filter(Boolean)) {
       list.append(el('button', {
         class: `pill ${p.id === chosenId ? 'on' : ''}`,
         onclick: () => { chosenId = p.id; paint(); },
       }, p.name || 'Ohne Namen'));
     }
+    if (liste.length > zeigen.length) list.append(el('span', { class: 'hint', text: `+ ${liste.length - zeigen.length} weitere weiter weg` }));
   }
 
   async function loadFromRule() {
@@ -640,11 +659,17 @@ function nearestForm(body, existing, prefill) {
         update((st) => { st.pois = pois; });
         MapMod.render();
       } else {
+        // Dichte Quellen brauchen viele Kandidaten, damit die Auswertung weit reicht
+        const dicht = sources.some((id) => id === 'street' || id === 'bus_route');
         const res = await findCandidates(me, sources, {
           area: getState().area,
           params: prefill.adminLevel ? { adminLevel: prefill.adminLevel } : {},
+          limit: dicht ? 250 : 60,
         });
         candidates = res.candidates;
+        // Tentakel: nur, was im Umkreis der Frage liegt, steht zur Wahl
+        if (!same && prefill.poiRadius) candidates = candidates.filter((c) => c.distance <= prefill.poiRadius);
+        cutoff = Number.isFinite(res.cutoffM) ? { at: { lat: me.lat, lng: me.lng }, distance: res.cutoffM } : null;
         pois = null;
       }
       const liste = eintraege();
@@ -687,7 +712,7 @@ function nearestForm(body, existing, prefill) {
       const liste = eintraege();
       if (!liste.length || !chosenId) { toast('Auswahl fehlt', 'error'); return null; }
       const base = { type: 'nearest', chosenId, invert, mode: same ? 'same' : 'which' };
-      if (candidates) return { ...base, candidates };
+      if (candidates) return { ...base, candidates, cutoff };
       return { ...base, pois: pois.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name })) };
     },
   };
@@ -821,6 +846,179 @@ function sideForm(body, existing, prefill) {
       };
     },
   };
+}
+
+// "Hat deine nächste Station einen gleich langen Namen wie meine?" Gezählt werden
+// Buchstaben und Ziffern – Leerzeichen, Bindestriche und Klammern nicht.
+export function nameLength(name) {
+  return (name || '').replace(/[^\p{L}\p{N}]/gu, '').length;
+}
+
+function nameLengthForm(body, existing, prefill) {
+  let pois = existing?.pois || null;
+  let mine = existing ? (existing.pois || []).find((p) => p.id === existing.chosenId) : null;
+  let invert = existing?.invert ?? false;
+  let cutoff = existing?.cutoff || null;
+  const sources = prefill?.sources?.length ? prefill.sources : ['station'];
+  const status = el('div', { class: 'card-sub' });
+  const gruppe = el('div', { class: 'hint' });
+
+  function paint() {
+    if (!mine) return;
+    const L = nameLength(mine.name);
+    const gleich = pois.filter((p) => nameLength(p.name) === L);
+    status.textContent = `Deine nächste: ${mine.name} · ${L} Buchstaben`;
+    gruppe.textContent = `Gleich lang (${gleich.length} von ${pois.length}): ${gleich.slice(0, 12).map((p) => p.name).join(', ')}${gleich.length > 12 ? ' …' : ''}`;
+  }
+
+  async function load() {
+    const me = Loc.current();
+    if (!me) { status.textContent = 'Standort nötig – Punkt auf der Karte setzen.'; return; }
+    status.textContent = 'Lade Stationen …';
+    try {
+      // Weit genug, dass jeder Punkt im Spielgebiet seine nächste Station mitbekommt
+      const b = C.areaBounds(getState().area);
+      const radius = b ? Math.max(10000, distance(me, { lat: b.south, lng: b.west }), distance(me, { lat: b.north, lng: b.east })) + 5000 : 15000;
+      const res = await findPoisCovering(me, sources, radius);
+      pois = res.pois.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name }));
+      if (!pois.length) { status.textContent = 'Keine Stationen gefunden.'; return; }
+      mine = pois[0];
+      cutoff = { at: { lat: me.lat, lng: me.lng }, distance: res.coveredM };
+      paint();
+    } catch (e) {
+      status.textContent = `Laden fehlgeschlagen: ${e.message || e}`;
+    }
+  }
+
+  append(body,
+    prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
+    status, gruppe,
+    el('div', { class: 'hint', text: 'Gezählt werden Buchstaben und Ziffern, ohne Leerzeichen und Satzzeichen.' }),
+    el('label', { class: 'field' }, 'Antwort',
+      segmented([{ value: false, label: 'Ja – gleich lang' }, { value: true, label: 'Nein – anders' }],
+        invert, (v) => { invert = v; })),
+  );
+  if (existing) paint(); else load();
+
+  return {
+    collect() {
+      if (!pois || !mine) { toast('Stationen fehlen noch', 'error'); return null; }
+      const L = nameLength(mine.name);
+      return {
+        type: 'nearest', mode: 'same', matchBy: 'nameLength', invert, cutoff,
+        pois, chosenId: mine.id,
+        chosenIds: pois.filter((p) => nameLength(p.name) === L).map((p) => p.id),
+        groupLabel: `Nächste Station mit ${L} Buchstaben (wie ${mine.name})`,
+      };
+    },
+  };
+}
+
+// "Bist du auf derselben Landmasse wie ich?" Landmassen sind hier Inseln aus OSM
+// (place=island/islet) – wer auf keiner steht, ist auf dem Festland.
+function landmassForm(body, existing, prefill) {
+  let islands = existing?.islands || null;
+  let mine = existing?.mineName ?? null;
+  let same = existing ? existing.same : true;
+  const status = el('div', { class: 'card-sub' });
+
+  function paint() {
+    if (!islands) return;
+    const namen = [...new Set(islands.map((i) => i.name).filter(Boolean))];
+    const ohne = islands.filter((i) => !i.name).length;
+    status.textContent = (mine ? `Du bist auf der Insel ${mine}.` : 'Du bist auf dem Festland.')
+      + (islands.length
+        ? ` ${islands.length} Inseln im Umkreis: ${namen.slice(0, 6).join(', ')}${namen.length > 6 ? ' …' : ''}${ohne ? ` und ${ohne} ohne Namen` : ''}.`
+        : ' Keine Inseln in der Nähe – alle sind auf derselben Landmasse.');
+  }
+
+  async function load() {
+    const me = Loc.current();
+    if (!me) { status.textContent = 'Standort nötig – Punkt auf der Karte setzen.'; return; }
+    status.textContent = 'Suche Inseln …';
+    try {
+      const res = await findNearestFeatures(me, ['island'], { area: getState().area });
+      islands = res.features.filter((f) => f.type === 'polygon')
+        .map((f) => ({ name: f.name, ring: f.points }));
+    } catch (e) {
+      islands = [];
+    }
+    const hier = islands.find((i) => pointInPolygon(me, i.ring));
+    mine = hier ? (hier.name || 'ohne Namen') : null;
+    paint();
+  }
+
+  append(body,
+    prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
+    status,
+    el('label', { class: 'field' }, 'Antwort',
+      segmented([{ value: true, label: 'Ja – dieselbe' }, { value: false, label: 'Nein – eine andere' }],
+        same, (v) => { same = v; })),
+  );
+  if (existing) paint(); else load();
+
+  return {
+    collect() {
+      if (!islands) { toast('Inseln werden noch geladen', 'error'); return null; }
+      const hier = mine ? islands.find((i) => (i.name || 'ohne Namen') === mine) : null;
+      const base = { type: 'area', landmass: true, islands, mineName: mine, same };
+      if (hier) {
+        // Auf einer Insel: dieselbe Landmasse = genau diese Insel
+        return { ...base, ring: hier.ring, inside: same, name: `Insel ${mine}` };
+      }
+      if (!islands.length) {
+        if (!same) { toast('Ohne Inseln in der Nähe kann die Antwort nicht „nein" sein', 'error'); return null; }
+        return { ...base, rings: [], inside: false, name: 'Festland (keine Inseln in der Nähe)' };
+      }
+      // Auf dem Festland: dieselbe = auf keiner Insel, eine andere = auf einer der Inseln
+      return { ...base, rings: islands.map((i) => i.ring), inside: !same, name: same ? 'auf einer Insel' : 'auf einer der Inseln' };
+    },
+  };
+}
+
+// Foto-Fragen: Wo im Restgebiet könnte das Foto entstanden sein? Zeigt die Orte der
+// passenden Kategorie, die nach allen bisherigen Antworten noch in Frage kommen.
+export async function openPhotoPlaces(option, sources) {
+  const me = Loc.current();
+  const s = getState();
+  openSheet(`Foto: ${option.label}`, (body, close) => {
+    const out = el('div', { class: 'list' }, el('div', { class: 'row-item' }, 'Suche passende Orte …'));
+    body.append(el('div', { class: 'hint', text: 'Orte dieser Art, die nach allen bisherigen Antworten noch in Frage kommen – zum Abgleich mit dem Foto.' }), out);
+    (async () => {
+      try {
+        const b = C.areaBounds(s.area);
+        const mitte = me || (b ? { lat: (b.south + b.north) / 2, lng: (b.west + b.east) / 2 } : null);
+        if (!mitte) { clear(out).append(el('div', { class: 'row-item', text: 'Erst ein Spielgebiet oder einen Standort festlegen.' })); return; }
+        const radius = b ? Math.max(distance(mitte, { lat: b.south, lng: b.west }), distance(mitte, { lat: b.north, lng: b.east })) + 500 : 5000;
+        const aktiv = s.constraints.filter((c) => c.active !== false);
+        const alle = (await findPoisCovering(mitte, sources, radius)).pois;
+        const passend = alle
+          .filter((p) => C.areaContains(s.area, p) && C.allowsAll(aktiv, p))
+          .map((p) => ({ ...p, distance: me ? distance(me, p) : p.distance }))
+          .sort((a, b2) => a.distance - b2.distance);
+        clear(out);
+        if (!passend.length) { out.append(el('div', { class: 'row-item', text: 'Kein passender Ort im Restgebiet.' })); return; }
+        for (const p of passend.slice(0, 25)) {
+          out.append(el('button', {
+            class: 'row-item',
+            onclick: () => { close(); MapMod.flyTo(p, 17); MapMod.addMarkerAt(p, p.name, `Foto: ${option.label}`, '#e3b341'); },
+          }, el('div', { class: 'row-text' },
+            el('div', { class: 'row-title', text: p.name }),
+            el('div', { class: 'row-sub', text: me ? `${formatDistance(p.distance)} von dir` : '' }))));
+        }
+        body.append(button('map', `Alle ${passend.length} auf der Karte zeigen`, () => {
+          update((st) => { st.pois = passend.slice(0, 300).map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name })); });
+          MapMod.render();
+          close();
+          document.querySelector('.tabbar [data-go="map"]').click();
+          toast(`${Math.min(passend.length, 300)} Orte als gelbe Punkte auf der Karte`, 'ok');
+        }, 'btn btn-wide btn-primary'));
+      } catch (e) {
+        clear(out).append(el('div', { class: 'row-item', text: `Laden fehlgeschlagen: ${e.message || e}` }));
+      }
+    })();
+    return [el('button', { class: 'btn grow', onclick: () => close() }, 'Schließen')];
+  });
 }
 
 function sectorForm(body, existing, prefill) {

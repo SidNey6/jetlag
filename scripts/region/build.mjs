@@ -60,7 +60,8 @@ function outputs() {
     list.push({ id: `pois/${cat.id}`, kind: 'pois', cat, statements: poiStatements(cat) });
   }
   for (const spec of REFERENCES) {
-    if (spec.kind === 'elevation') continue;
+    // Nahbereichsquellen (benannte Straßen) kommen aus den Straßenkacheln
+    if (spec.kind === 'elevation' || spec.localKm) continue;
     const variants = spec.param === 'adminLevel' ? BORDER_LEVELS.map((l) => ({ adminLevel: l })) : [{}];
     for (const params of variants) {
       const p = Object.entries(params).map(([k, v]) => `${k}=${v}`).join(',');
@@ -334,7 +335,7 @@ function buildRefs(out, elements, region) {
   } else {
     feats = [];
     for (const e of elements) {
-      const ids = G.identitiesOf(e, spec.refPrefix);
+      const ids = G.identitiesOf(e, spec.refPrefix, spec.identity === 'name');
       let fs;
       if (e.type === 'relation' && spec.geom !== 'line') {
         // Ein Umriss, der sich nicht schließt (Teil eines großen Gebiets, das über den
@@ -426,6 +427,8 @@ function buildStreets(elements, region) {
       start = i;
     }
     const entry = { id: w.id, h: w.tags.highway, c: flat(slim, R6) };
+    // Name für "Straße oder Weg" beim Matching
+    if (w.tags.name) entry.n = w.tags.name;
     // In jede Kachel, die ein Abschnitt berührt
     const keys = new Set();
     for (let i = 0; i < slim.length; i++) {
@@ -474,10 +477,13 @@ export function buildRegion({ region, pbf, out, quiet = false }) {
     if (data) counts[o.id] = (data.items || data.features || []).length;
   }
   for (const [k, v] of geoms) files.set(k, v);
-  // Leere Dateien weglassen: dann fragt die App gleich online
+  // Leere Dateien weglassen, aber vermerken: "gibt es in der Region nicht" (keine
+  // U-Bahn in Bonn) ist eine Antwort – bei Fragen mit mehreren Quellen muss die App
+  // dafür nicht online nachsehen
+  const leer = [];
   for (const [k, v] of files) {
     const n = (v.items || v.features || v.ways || [v.c]).length;
-    if (!n) files.delete(k);
+    if (!n) { files.delete(k); leer.push(k); }
   }
 
   // Schreiben
@@ -506,6 +512,7 @@ export function buildRegion({ region, pbf, out, quiet = false }) {
     built: new Date().toISOString(),
     source: 'OpenStreetMap-Mitwirkende (ODbL), Auszüge von Geofabrik',
     files: sizes,
+    empty: leer.filter((k) => !k.startsWith('streets/')).sort(),
   };
   const listPath = join(opt.out, 'regions.json');
   const bestehend = existsSync(listPath) ? JSON.parse(readFileSync(listPath, 'utf8')).regions || [] : [];

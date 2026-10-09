@@ -48,6 +48,8 @@ export function neededSources() {
     const spec = reference(id);
     if (!spec || spec.kind === 'elevation') { if (spec) elevation = true; return; }
     if (spec.param && params[spec.param] == null) return;
+    // Nahbereichsquellen lassen sich nicht fürs ganze Gebiet vorladen
+    if (spec.localKm) return;
     refs.set(bundleKey(id, params), { id, params });
   };
 
@@ -60,7 +62,7 @@ export function neededSources() {
         if (typ === 'elevation') elevation = true;
         if (typ === 'area' && o.adminLevel) adminLevels.add(o.adminLevel);
         for (const id of ids) {
-          if (typ === 'compare' || typ === 'side') addRef(id, params);
+          if (typ === 'compare' || typ === 'side' || typ === 'area') addRef(id, params);
           else if (typ === 'nearest') {
             if (poiCategory(id) && o.match !== 'shape') pois.add(id); else addRef(id, params);
           } else if (poiCategory(id)) pois.add(id);

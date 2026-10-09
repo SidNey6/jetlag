@@ -6,7 +6,7 @@ import { getState } from './state.js';
 import { areaBounds } from './constraints.js';
 import { bundleGet, bundleCovers } from './bundle.js';
 import * as Region from './region.js';
-import { distance, formatDistance, destination, circle, distanceToFeatures, pointInPolygon } from './geo.js';
+import { distance, formatDistance, destination, circle, distanceToFeatures, pointInPolygon, simplify } from './geo.js';
 import { el, clear, openSheet, toast } from './ui/ui.js';
 import { POI_CATEGORIES, REFERENCES, poiCategory, reference, referenceStatements, poiStatements } from './sources.js';
 import {
@@ -123,6 +123,36 @@ export async function findPois(center, categoryId, radiusM, namedOnly = true) {
     .sort((a, b) => a.distance - b.distance);
 }
 
+// Orte mehrerer Kategorien in einem großen Umkreis – etwa alle Stationen fürs ganze
+// Spielgebiet. coveredM sagt, bis wohin sicher alle geladen sind: in der Region bis zu
+// ihrem Rand, sonst der ganze Umkreis.
+export async function findPoisCovering(center, categoryIds, radiusM) {
+  await Region.initRegions();
+  const region = Region.regionAt(center);
+  let liste = null;
+  let coveredM = radiusM;
+  if (region && categoryIds.every((id) => Region.has(region, `pois/${id}`))) {
+    coveredM = Math.min(radiusM, Region.edgeDistance(region, center));
+    liste = [];
+    for (const id of categoryIds) {
+      const vorrat = await Region.regionTry(region, `pois/${id}`);
+      if (!vorrat) { liste = null; break; }
+      for (const p of vorrat) liste.push({ ...p, kind: id });
+    }
+  }
+  if (!liste) {
+    coveredM = radiusM;
+    liste = [];
+    for (const id of categoryIds) liste.push(...(await findPois(center, id, radiusM)).map((p) => ({ ...p, kind: id })));
+  }
+  const gesehen = new Set();
+  const pois = liste
+    .map((p) => ({ ...p, distance: distance(center, p) }))
+    .filter((p) => p.distance <= radiusM && !gesehen.has(p.id) && gesehen.add(p.id))
+    .sort((a, b) => a.distance - b.distance);
+  return { pois, coveredM };
+}
+
 /* ---------- Endgame: Haltestellen und Straßennetz ---------- */
 
 // Haltestellen aller Art um einen angetippten Punkt – eine Abfrage statt drei, damit
@@ -208,13 +238,23 @@ export function bundleKey(refId, params) {
 // nachladen, dass das ganze Spielgebiet plus der gemessene Abstand abgedeckt ist –
 // sonst läge ein Punkt am anderen Ende des Gebiets scheinbar weit vom Objekt weg,
 // nur weil dessen Teilstücke dort nicht mitgeladen wurden.
-async function loadReference(center, refId, { area = null, maxKm = null, params = {} } = {}) {
+async function loadReference(center, refId, { area = null, maxKm = null, params = {}, partOfMany = false } = {}) {
   const spec = reference(refId);
   if (!spec) throw new Error(`Unbekanntes Bezugsobjekt "${refId}"`);
   if (spec.kind === 'elevation') throw new Error(`"${spec.label}" ist ein Höhenwert, keine Geometrie`);
   const statements = referenceStatements(spec, params);
   if (!statements.length) throw new Error(`Für "${spec.label}" ist keine Abfrage hinterlegt`);
   const timeout = getState().settings.overpassTimeout || 25;
+
+  if (spec.localKm) return loadLocal(center, spec, statements, timeout);
+
+  // Eine von mehreren Quellen, die es in der Region nicht gibt: nicht online suchen –
+  // die anderen Quellen tragen die Frage
+  if (partOfMany) {
+    await Region.initRegions();
+    const region = Region.regionAt(center);
+    if (Region.knownEmpty(region, bundleKey(refId, params))) throw new Error(`${spec.label}: in ${region.name} nicht vorhanden`);
+  }
 
   // Vorgebaute Regionsdaten: reicht die Region weit genug, ist das die Antwort. Sonst
   // dient sie als Rückfall, falls Overpass nicht erreichbar ist.
@@ -228,6 +268,7 @@ async function loadReference(center, refId, { area = null, maxKm = null, params 
       feats: vorrat.map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
         .sort((a, b) => a.distance - b.distance),
       coveredKm: null,
+      coveredM: Infinity,
       offline: true,
     };
   }
@@ -269,7 +310,11 @@ async function referenceFromRegion(center, spec, key, area) {
   }));
   return {
     complete,
-    result: { spec, feats: slim, coveredKm: Math.ceil(reichweite / KM), offline: true, region: region.name },
+    result: {
+      spec, feats: slim, coveredKm: Math.ceil(reichweite / KM), offline: true, region: region.name,
+      // Bis hierhin ist nichts weggelassen; ist die Region vollständig, gilt sie überall
+      coveredM: complete ? Infinity : reichweite * 1.05 + 100,
+    },
   };
 }
 
@@ -326,7 +371,8 @@ async function referenceOnline(center, spec, statements, { area, maxKm, timeout 
   const slim = fitBudget(merged).map((f) => ({
     type: f.type, name: f.name, key: f.key, distance: f.distance, points: f.points,
   }));
-  return { spec, feats: slim, coveredKm: Math.max(hitKm, Math.ceil(neededKm)), offline: false };
+  const coveredKm = Math.max(hitKm, Math.ceil(neededKm));
+  return { spec, feats: slim, coveredKm, coveredM: coveredKm * KM, offline: false };
 }
 
 // Für Vergleichsfragen: alle Geometrie einer oder mehrerer Referenzen als ein Satz.
@@ -336,7 +382,7 @@ export async function findNearestFeatures(center, refIds, opts = {}) {
   const ids = Array.isArray(refIds) ? refIds : [refIds];
   // Quellen parallel laden; eine fehlende Quelle ("keine Stadtbahn hier") ist kein
   // Fehler, solange eine andere etwas liefert
-  const settled = await Promise.allSettled(ids.map((id) => loadReference(center, id, opts)));
+  const settled = await Promise.allSettled(ids.map((id) => loadReference(center, id, { ...opts, partOfMany: ids.length > 1 })));
   const results = settled.filter((x) => x.status === 'fulfilled').map((x) => x.value);
   const fehler = settled.filter((x) => x.status === 'rejected').map((x) => x.reason);
   if (!results.length) throw fehler[0] || new Error('Keine Geometrie gefunden');
@@ -349,8 +395,41 @@ export async function findNearestFeatures(center, refIds, opts = {}) {
     distance: features[0].distance,
     name: features[0].name,
     coveredKm: Math.max(...results.map((r) => r.coveredKm || 0)) || null,
+    // Umkreis, in dem garantiert alle Objekte geladen sind
+    coveredM: Math.min(...results.map((r) => r.coveredM ?? Infinity)),
     offline: results.every((r) => r.offline),
   };
+}
+
+// Benannte Straßen und andere dichte Quellen: nur im Nahbereich, dafür vollständig.
+// Mit Regionsdaten aus den Straßenkacheln, sonst eine Overpass-Abfrage.
+async function loadLocal(center, spec, statements, timeout) {
+  await Region.initRegions();
+  const radius = spec.localKm * KM;
+  let feats = null;
+  let offline = false;
+  const region = Region.regionAt(center);
+  if (spec.id === 'street' && Region.streetsCover(region, center, radius)) {
+    try {
+      const wege = await Region.regionStreets(region, center, radius);
+      feats = wege.filter((w) => w.name).map((w) => ({
+        type: 'line', name: w.name, key: `n:${w.name}`,
+        points: w.pts.map(([lat, lng]) => ({ lat, lng })),
+      }));
+      offline = true;
+    } catch (e) { feats = null; }
+  }
+  if (!feats) {
+    feats = featuresFrom(await query(aroundQuery(statements, center, spec.localKm, timeout)), spec, center);
+  }
+  // Fein vereinfachen: Straßen liegen oft nur 30 m auseinander
+  const merged = mergeLines(feats)
+    .map((f) => ({ ...f, points: f.points.length > 4 ? simplify(f.points, 0.00002) : f.points }))
+    .map((f) => ({ type: f.type, name: f.name, key: f.key, points: f.points, distance: distanceToFeatures(center, [f]) }))
+    .filter((f) => f.distance <= radius)
+    .sort((a, b) => a.distance - b.distance);
+  if (!merged.length) throw new Error(`${spec.label}: nichts im Umkreis von ${spec.localKm} km`);
+  return { spec, feats: merged, coveredKm: spec.localKm, coveredM: radius, offline };
 }
 
 // Für "ist dein nächstes X dasselbe wie meines?" bei Linien und Flächen: Objekte mit
@@ -365,8 +444,11 @@ export async function findCandidates(center, refIds, { limit = 40, ...opts } = {
     c.features.push({ type: f.type, points: f.points });
     if (f.distance < c.distance) c.distance = f.distance;
   }
-  const candidates = [...byKey.values()].sort((a, b) => a.distance - b.distance).slice(0, limit);
-  return { label: res.label, candidates, offline: res.offline };
+  const alle = [...byKey.values()].sort((a, b) => a.distance - b.distance);
+  const candidates = alle.slice(0, limit);
+  // Was nicht in der Liste ist, liegt mindestens so weit weg – bis dahin ist sie vollständig
+  const cutoffM = Math.min(res.coveredM ?? Infinity, alle.length > limit ? alle[limit].distance : Infinity);
+  return { label: res.label, candidates, offline: res.offline, cutoffM };
 }
 
 // Für "gleiche Flussseite?": Gesucht ist kein nächstes Objekt, sondern ein Fluss, an

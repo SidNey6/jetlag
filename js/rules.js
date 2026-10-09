@@ -58,7 +58,7 @@ export async function resetRules() {
 
 /* ---------- Prüfung ---------- */
 
-export const APP_TYPES = ['radius', 'thermo', 'compare', 'nearest', 'area', 'elevation', 'sector', 'side'];
+export const APP_TYPES = ['radius', 'thermo', 'compare', 'nearest', 'area', 'elevation', 'sector', 'side', 'photo'];
 export const TIE_BREAKS = ['inside', 'outside', 'warmer', 'colder', 'closer', 'further', 'yes', 'no'];
 export const PHASES = ['roundStart', 'hidingEnd', 'searchStart', 'endgame', 'found'];
 export const OUTCOMES = ['seekersLose', 'hiderLoses', 'note'];
@@ -164,6 +164,7 @@ export function validateRules(data) {
       if (o.sizes && o.sizes.some((sz) => !sizeIds.has(sz))) fail(`${wo}: unbekannte Spielgröße in "sizes".`);
       if ('appType' in o && o.appType !== null) oneOf(o.appType, APP_TYPES, `${wo}, "appType"`);
       oneOf(o.match, ['point', 'shape'], `${wo}, "match"`);
+      oneOf(o.matchBy, ['nameLength'], `${wo}, "matchBy"`);
       if (o.adminLevel != null && (!Number.isInteger(o.adminLevel) || o.adminLevel < 2 || o.adminLevel > 12)) {
         fail(`${wo}: "adminLevel" muss zwischen 2 und 12 liegen.`);
       }

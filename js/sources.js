@@ -25,6 +25,7 @@ export const POI_CATEGORIES = [
   { id: 'university',  label: 'Hochschulen',         filters: ['["amenity"="university"]'] },
   { id: 'library',     label: 'Bibliotheken',        filters: ['["amenity"="library"]'] },
   { id: 'supermarket', label: 'Supermärkte',         filters: ['["shop"="supermarket"]'] },
+  { id: 'restaurant',  label: 'Restaurants',         filters: ['["amenity"="restaurant"]'] },
   { id: 'zoo',         label: 'Zoos/Tierparks',      filters: ['["tourism"="zoo"]'] },
   { id: 'aquarium',    label: 'Aquarien',            filters: ['["tourism"="aquarium"]'] },
   { id: 'theme_park',  label: 'Freizeitparks',       filters: ['["tourism"="theme_park"]'] },
@@ -50,6 +51,9 @@ export const POI_CATEGORIES = [
 // kind: 'elevation' – kein OSM, sondern Höhenmodell
 // refPrefix: Straßen gehören über ihre Nummer zusammen (A 565, B 9, L 158), nicht über den
 //           Straßennamen – sonst zerfiele die B 9 in Bonn in Adenauerallee, Bonner Straße …
+// identity: 'name' – Teilstücke gehören über den Namen zusammen, auch bei Straßen mit Nummer
+// localKm:  nur im Umkreis dieser Kilometer um den Fragenden laden; weiter weg bleibt die
+//           Frage ohne Wirkung (sicher statt falsch)
 // directed: die Wegrichtung in OSM ist verlässlich (Gewässer fließen in Zeichenrichtung,
 //           Küsten haben Land links) – Voraussetzung für Seitenfragen ("gleiche Flussseite?")
 export const REFERENCES = [
@@ -96,6 +100,10 @@ export const REFERENCES = [
   { id: 'golf',           label: 'Golfplatz',                 from: 'golf', geom: 'auto', ladder: [5, 20, 60, 180] },
   { id: 'stadium',        label: 'Stadion',                   from: 'stadium', geom: 'auto', ladder: [5, 20, 60, 180] },
   { id: 'worship',        label: 'Gotteshaus',                from: 'worship', geom: 'auto', ladder: [1.5, 5, 15, 50] },
+  { id: 'island',         label: 'Insel',                     q: ['nwr["place"~"^(island|islet)$"]'], geom: 'auto', ladder: [2, 8, 25, 80] },
+  // Benannte Straßen und Wege: nur im Nahbereich (localKm) – im ganzen Spielgebiet wären
+  // es Zehntausende. Gehört über den Namen zusammen, nicht über die Straßennummer.
+  { id: 'street',         label: 'Straße oder Weg',           q: ['way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|service|track|footway|path|cycleway|steps|bridleway)$"]["name"]'], geom: 'line', identity: 'name', localKm: 1.5 },
   { id: 'sea_level',      label: 'Meeresspiegel',             kind: 'elevation' },
 ];
 

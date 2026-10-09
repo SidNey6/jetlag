@@ -139,8 +139,9 @@ function normRef(r) {
 // Alle Identitäten eines Elements. Meist genau eine; ein Straßenstück mit mehreren
 // Nummern ("A 1;A 61") gehört aber zu beiden Autobahnen – im Grenzfall sind beide gleich
 // nah. prefix (aus sources.js: refPrefix) beschränkt auf die gesuchte Straßenklasse.
-export function identitiesOf(e, prefix = null) {
+export function identitiesOf(e, prefix = null, byName = false) {
   const t = e.tags || {};
+  if (byName && t.name) return [{ key: `n:${t.name}`, name: t.name }];
   if (t.route) {
     const nr = t.ref || t.name || `#${e.id}`;
     return [{ key: `${t.route}:${nr}`, name: t.ref ? `${ROUTE_LABEL[t.route] || t.route} ${t.ref}` : (t.name || nr) }];
@@ -183,7 +184,7 @@ export function elementToFeatures(e, geomHint) {
 export function featuresFrom(json, spec, center) {
   const out = [];
   for (const e of json.elements || []) {
-    const ids = identitiesOf(e, spec.refPrefix);
+    const ids = identitiesOf(e, spec.refPrefix, spec.identity === 'name');
     for (const f of elementToFeatures(e, spec.geom)) {
       if (!f.points.length) continue;
       f.distance = distanceToFeatures(center, [f]);

@@ -441,3 +441,47 @@ test('Flussseite als Frage: gleiche Seite schließt das andere Ufer aus', () => 
   assert.ok(!C.allows(mitToleranz, off(10, 0)));
   assert.ok(C.needsRaster(gleich));
 });
+
+/* ---------- Gruppen, Sicherheitsgrenze, mehrere Flächen ---------- */
+
+test('Gruppe: nächste Station mit gleich langem Namen', () => {
+  const pois = [
+    { id: 'a', ...off(0, 0), name: 'Bonn Hbf' },      // 7 Buchstaben
+    { id: 'b', ...off(2000, 0), name: 'Beuel' },      // 5
+    { id: 'c', ...off(0, 2000), name: 'Godesb' },     // 6
+    { id: 'd', ...off(-2000, 0), name: 'Duisdrf' },   // 7
+  ];
+  const ja = { type: 'nearest', pois, chosenId: 'a', chosenIds: ['a', 'd'], invert: false };
+  assert.ok(C.allows(ja, off(-1900, 100)), 'nächste ist d, gleich lang');
+  assert.ok(!C.allows(ja, off(1900, 0)), 'nächste ist b, anders lang');
+  const nein = { ...ja, invert: true };
+  assert.ok(C.allows(nein, off(1900, 0)));
+  assert.ok(!C.allows(nein, off(50, 50)));
+  assert.ok(C.needsRaster(ja));
+});
+
+test('Sicherheitsgrenze: außerhalb des geladenen Umkreises schließt die Frage nichts aus', () => {
+  const linie = (dx) => [{ type: 'line', points: [off(dx, -500), off(dx, 500)] }];
+  const c = {
+    type: 'nearest', invert: true, chosenId: 'x',
+    candidates: [{ id: 'x', name: 'X', features: linie(0) }, { id: 'y', name: 'Y', features: linie(300) }],
+    cutoff: { at: off(0, 0), distance: 1000 },
+  };
+  // Nah dran: genau bekannt – nächste ist X, "nein" schließt den Punkt aus
+  assert.ok(!C.allows(c, off(-50, 0)));
+  // Weit draußen könnte eine nicht geladene Linie näher sein: nicht ausschließen
+  assert.ok(C.allows(c, off(-3000, 0)));
+});
+
+test('Landmasse: auf einer der Inseln oder auf keiner', () => {
+  const insel = (dx) => [off(dx - 100, -100), off(dx + 100, -100), off(dx + 100, 100), off(dx - 100, 100)];
+  const rings = [insel(0), insel(1000)];
+  const aufInsel = { type: 'area', rings, inside: true };
+  assert.ok(C.allows(aufInsel, off(1000, 0)));
+  assert.ok(!C.allows(aufInsel, off(500, 0)));
+  const festland = { type: 'area', rings, inside: false };
+  assert.ok(C.allows(festland, off(500, 0)));
+  assert.ok(!C.allows(festland, off(0, 0)));
+  assert.equal(C.shapes(aufInsel)[0].kind, 'rings');
+  assert.equal(C.shapes(festland).length, 2);
+});

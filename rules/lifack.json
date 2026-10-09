@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "lifack-hide-and-seek",
   "name": "Hide and Seek (lifack.ch)",
-  "version": "2026-10-09b",
+  "version": "2026-10-10",
   "source": "https://www.lifack.ch/docs/quick_start_guide/",
   "sourceNote": "Werte übernommen von lifack.ch, einer inoffiziellen Fan-Umsetzung von Jet Lag: Hide and Seek. Nicht mit Jet Lag, Nebula oder Wendover Productions verbunden. Die Originalmaße in Meilen sind hier auf runde metrische Werte umgestellt (¼ Meile → 400 m, 1 Meile → 1,6 km, 3 Meilen → 5 km). Ergänzt um die Matching-Fragen „Flussseite“, „Autobahn“ und „Landstraße“.",
   "unitsOfOrigin": "imperial",
@@ -118,8 +118,13 @@
             "medium",
             "large"
           ],
-          "appType": null,
-          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
+          "osm": [
+            "bus_route",
+            "tram_route",
+            "subway_route",
+            "rail_route"
+          ],
+          "match": "shape"
         },
         {
           "label": "Länge des Stationsnamens",
@@ -129,8 +134,8 @@
             "medium",
             "large"
           ],
-          "appType": null,
-          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
+          "osm": "station",
+          "matchBy": "nameLength"
         },
         {
           "label": "Straße oder Weg",
@@ -140,8 +145,8 @@
             "medium",
             "large"
           ],
-          "appType": null,
-          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
+          "osm": "street",
+          "match": "shape"
         },
         {
           "label": "Autobahn",
@@ -233,8 +238,8 @@
             "medium",
             "large"
           ],
-          "appType": null,
-          "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
+          "appType": "area",
+          "osm": "island"
         },
         {
           "label": "Park",
@@ -758,8 +763,11 @@
           "sizes": [
             "large"
           ],
-          "appType": null,
-          "note": "Linien statt Orte – wird nur protokolliert"
+          "osm": [
+            "subway_route",
+            "tram_route"
+          ],
+          "match": "shape"
         },
         {
           "label": "Zoos",
@@ -803,7 +811,7 @@
         "medium": 10,
         "large": 20
       },
-      "appType": null,
+      "appType": "photo",
       "options": [
         {
           "label": "Ein Baum",
@@ -843,7 +851,8 @@
             "small",
             "medium",
             "large"
-          ]
+          ],
+          "osm": "tower"
         },
         {
           "label": "Irgendein von der Station sichtbares Gebäude",
@@ -879,13 +888,18 @@
           "sizes": [
             "medium",
             "large"
-          ]
+          ],
+          "osm": "restaurant"
         },
         {
           "label": "Bahnsteig",
           "sizes": [
             "medium",
             "large"
+          ],
+          "osm": [
+            "station",
+            "tram_subway"
           ]
         },
         {
@@ -893,21 +907,24 @@
           "sizes": [
             "medium",
             "large"
-          ]
+          ],
+          "osm": "park"
         },
         {
           "label": "Supermarktgang",
           "sizes": [
             "medium",
             "large"
-          ]
+          ],
+          "osm": "supermarket"
         },
         {
           "label": "Gotteshaus",
           "sizes": [
             "medium",
             "large"
-          ]
+          ],
+          "osm": "worship"
         },
         {
           "label": "800 m Straßenverlauf nachgezeichnet",
@@ -919,13 +936,15 @@
           "label": "Höchster von der Station sichtbarer Berg",
           "sizes": [
             "large"
-          ]
+          ],
+          "osm": "peak"
         },
         {
           "label": "Größtes Gewässer in deiner Zone",
           "sizes": [
             "large"
-          ]
+          ],
+          "osm": "lake"
         },
         {
           "label": "Fünf Gebäude",

@@ -203,6 +203,8 @@ test('Bau-Skript: Orte, Grenzen, Linien und Straßen aus derselben Quelle', () =
   assert.equal(liste.regions[0].version, manifest.version);
   assert.ok(manifest.files['pois/bus'] > 0);
   assert.ok(!('pois/zoo' in manifest.files), 'leere Dateien werden weggelassen');
+  assert.ok(manifest.empty.includes('pois/zoo'), 'aber als leer vermerkt');
+  assert.ok(manifest.empty.every((k) => !(k in manifest.files)));
 });
 
 test('Gleiche Daten ergeben denselben Datenstand', () => {

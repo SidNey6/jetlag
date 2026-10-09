@@ -81,7 +81,8 @@ function registries() {
 function knownFor(q, o, reg) {
   const typ = 'appType' in o ? o.appType : q.appType;
   const ids = Array.isArray(o.osm) ? o.osm : [o.osm];
-  if (typ === 'compare' || typ === 'side') return ids.every((id) => reg.refs.has(id));
+  if (typ === 'compare' || typ === 'side' || typ === 'area') return ids.every((id) => reg.refs.has(id));
+  if (typ === 'photo') return ids.every((id) => reg.poi.has(id));
   return ids.every((id) => reg.poi.has(id) || reg.refs.has(id));
 }
 
@@ -108,6 +109,8 @@ test('Keine Option verlangt manuelle Eingaben', () => {
         continue;
       }
       if (typ === 'radius' || typ === 'thermo' || typ === 'elevation') continue;
+      // Fotos brauchen keine Eingabe; mit osm zeigen sie passende Orte im Restgebiet
+      if (typ === 'photo') continue;
       if (typ === 'area' && o.adminLevel) continue;
       if (o.freeChoice) continue;
       if (!o.osm || !knownFor(q, o, reg)) offen.push(`${q.id}/${o.label}`);
@@ -195,4 +198,20 @@ test('Matching kennt Autobahn und Landstraße als Linien', () => {
   assert.deepEqual(land.osm, ['federal_road', 'state_road', 'county_road']);
   for (const o of [auto, land]) assert.equal(o.match, 'shape', `${o.label} muss als Linie verglichen werden`);
   for (const id of land.osm) assert.ok(Sources.reference(id)?.refPrefix, `${id} braucht refPrefix`);
+});
+
+test('Keine Option bleibt ohne Auswertung', () => {
+  const ohne = [];
+  for (const q of data.questions) {
+    for (const o of q.options) {
+      const typ = 'appType' in o ? o.appType : q.appType;
+      if (typ == null) ohne.push(`${q.id}/${o.label}`);
+    }
+  }
+  assert.deepEqual(ohne, []);
+  // Fotos, die einer Ortsart entsprechen, zeigen passende Orte
+  const photos = data.questions.find((q) => q.id === 'photos');
+  for (const label of ['Gotteshaus', 'Park', 'Supermarktgang', 'Restaurantinneres', 'Bahnsteig']) {
+    assert.ok(photos.options.find((o) => o.label === label).osm, label);
+  }
 });

@@ -18,7 +18,7 @@ import { initRegions } from './region.js';
 import { el, clear, openSheet, promptSheet, toast, icon, row } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.7.1';
+window.__JL_VERSION__ = 'v1.8.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',

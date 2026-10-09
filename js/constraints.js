@@ -52,10 +52,12 @@ export function allows(c, p) {
       return sideA(c, s, false) === !!c.closer;
     }
     case 'area': {
-      const inside = pointInPolygon(p, c.ring);
+      // rings: mehrere Flächen auf einmal ("auf einer der Inseln")
+      const rings = c.rings || [c.ring];
+      const inside = rings.some((r) => pointInPolygon(p, r));
       // Den Randabstand nur rechnen, wenn eine Toleranz ihn überhaupt braucht
       const s = c.tieBreak && c.tieToleranceM > 0
-        ? (inside ? 1 : -1) * distanceToRing(p, c.ring)
+        ? (inside ? 1 : -1) * Math.min(...rings.map((r) => distanceToRing(p, r)))
         : (inside ? 1 : -1);
       return sideA(c, s, true) === !!c.inside;
     }
@@ -90,6 +92,15 @@ export function allows(c, p) {
 
 // "Ist dein nächstes X dasselbe wie meines?" – X als Punkte (pois) oder als Objekte
 // mit Geometrie (candidates: Linien, Flächen). invert = Antwort "nein".
+// Sicherheitsgrenze: Geladen wurde nur, was im Umkreis cutoff.distance um cutoff.at
+// liegt (Straßen im Nahbereich, die nächsten 40 Linien …). Ist für einen Punkt selbst
+// das nächste geladene Objekt so weit weg, dass ein nicht geladenes näher sein könnte,
+// weiß die Frage dort nichts – und schließt dann lieber nichts aus als das Falsche.
+function beyondCutoff(c, p, dMin) {
+  if (!c.cutoff || !Number.isFinite(c.cutoff.distance)) return false;
+  return dMin >= c.cutoff.distance - distance(p, c.cutoff.at);
+}
+
 function nearestAllows(c, p) {
   const yes = !c.invert;
 
@@ -105,10 +116,14 @@ function nearestAllows(c, p) {
       const d = distanceToFeatures(p, cand.features, Math.min(limit, dOther));
       if (d < dOther) dOther = d;
     }
+    if (beyondCutoff(c, p, Math.min(dChosen, dOther))) return true;
     return sideA(c, dOther - dChosen, true) === yes;
   }
 
   if (!c.pois || !c.pois.length) return true;
+  // Gruppe statt einzelnem Ort: "hat deine nächste Station einen gleich langen Namen?"
+  // – passend ist jede Station der Gruppe
+  const group = c.chosenIds ? new Set(c.chosenIds) : null;
   // Quadrierte lokale Abstände genügen fürs Argmin und sparen die Trigonometrie
   const mLat = 111319.49;
   const mLng = mLat * Math.cos(p.lat * Math.PI / 180);
@@ -116,10 +131,11 @@ function nearestAllows(c, p) {
   for (const o of c.pois) {
     const dx = (o.lng - p.lng) * mLng, dy = (o.lat - p.lat) * mLat;
     const d2 = dx * dx + dy * dy;
-    if (o.id === c.chosenId) dChosen2 = d2;
+    if (group ? group.has(o.id) : o.id === c.chosenId) { if (d2 < dChosen2) dChosen2 = d2; }
     else if (d2 < dOther2) dOther2 = d2;
   }
-  if (dChosen2 === Infinity) return true;
+  if (dChosen2 === Infinity) return group ? !yes : true;
+  if (beyondCutoff(c, p, Math.sqrt(Math.min(dChosen2, dOther2)))) return true;
   const s = Math.sqrt(dOther2) - Math.sqrt(dChosen2);
   return sideA(c, s, true) === yes;
 }
@@ -132,7 +148,8 @@ function nearestAllows(c, p) {
 const rasterCache = new WeakMap();
 
 export function needsRaster(c) {
-  return c.type === 'elevation' || c.type === 'side' || (c.type === 'nearest' && !!c.candidates);
+  return c.type === 'elevation' || c.type === 'side'
+    || (c.type === 'nearest' && (!!c.candidates || !!c.chosenIds || !!c.cutoff));
 }
 
 export function rasterFor(c, bounds, cols = 100) {
@@ -156,6 +173,16 @@ export function rasterFor(c, bounds, cols = 100) {
   const raster = { ...bounds, rows, cols, bits };
   rasterCache.set(c, { key, raster });
   return raster;
+}
+
+function boxAround(p, m) {
+  const dLat = m / 111320, dLng = m / (111320 * Math.cos(p.lat * Math.PI / 180));
+  return { south: p.lat - dLat, north: p.lat + dLat, west: p.lng - dLng, east: p.lng + dLng };
+}
+
+function intersect(a, b) {
+  const r = { south: Math.max(a.south, b.south), north: Math.min(a.north, b.north), west: Math.max(a.west, b.west), east: Math.min(a.east, b.east) };
+  return r.south < r.north && r.west < r.east ? r : null;
 }
 
 function fallbackBounds(c) {
@@ -185,7 +212,10 @@ export function compareDistance(c) {
 //   {kind:'halfplane', line, excludeRef}  – excludeRef liegt auf der wegfallenden Seite
 export function shapes(c, ctx = {}) {
   if (needsRaster(c)) {
-    const b = ctx.bounds || fallbackBounds(c);
+    let b = ctx.bounds || fallbackBounds(c);
+    // Mit Sicherheitsgrenze wirkt die Frage nur in deren Umkreis – dort dafür fein
+    // gerastert, sonst verschwände ein Straßenzug zwischen 150-m-Zellen
+    if (b && c.cutoff && Number.isFinite(c.cutoff.distance)) b = intersect(b, boxAround(c.cutoff.at, c.cutoff.distance));
     return b ? [{ kind: 'raster', raster: rasterFor(c, b, ctx.cols || 100) }] : [];
   }
   switch (c.type) {
@@ -207,6 +237,12 @@ export function shapes(c, ctx = {}) {
         excludeRef: c.warmer ? c.from : c.to,
       }];
     case 'area':
+      if (c.rings) {
+        // "auf einer der Flächen": alles außer ihrer Vereinigung fällt weg
+        return c.inside
+          ? [{ kind: 'rings', rings: c.rings, exclude: 'outside' }]
+          : c.rings.map((r) => ({ kind: 'ring', ring: r, exclude: 'inside' }));
+      }
       return [{ kind: 'ring', ring: c.ring, exclude: c.inside ? 'outside' : 'inside' }];
     case 'nearest': {
       const chosen = c.pois.find((x) => x.id === c.chosenId);
@@ -252,7 +288,7 @@ export function outline(c) {
           ? { kind: 'dot', at: f.points[0], strong: cand.id === c.chosenId }
           : { kind: 'path', points: f.points, closed: f.type === 'polygon', strong: cand.id === c.chosenId, faint: cand.id !== c.chosenId })));
       }
-      return c.pois.map((p) => ({ kind: 'dot', at: p, strong: p.id === c.chosenId, label: p.name }));
+      return c.pois.map((p) => ({ kind: 'dot', at: p, strong: c.chosenIds ? c.chosenIds.includes(p.id) : p.id === c.chosenId, label: p.name }));
     case 'elevation':
       return c.myPoint ? [{ kind: 'dot', at: c.myPoint, strong: true }] : [];
     case 'side':
@@ -279,6 +315,7 @@ export function describe(c) {
     case 'area':
       return `${c.inside ? 'In' : 'Nicht in'} ${c.name || 'Gebiet'}`;
     case 'nearest': {
+      if (c.groupLabel) return `${c.invert ? 'Nicht: ' : ''}${c.groupLabel}`;
       const liste = c.candidates || c.pois || [];
       const chosen = liste.find((x) => x.id === c.chosenId);
       const name = chosen ? chosen.name : '?';

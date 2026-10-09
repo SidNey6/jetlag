@@ -257,6 +257,7 @@ Aufzählung, jeder Abschnitt aus `sections` als eigener Block.
 | `area` | Im selben Gebiet? | `adminLevel` oder ein gewähltes Gebiet |
 | `elevation` | Näher am Meeresspiegel als ich? | nichts – Geländehöhe wird geladen |
 | `side` | Auf derselben Seite des Flusses? | `osm` mit `river` oder `stream` |
+| `photo` | Foto – Frist und Protokoll | optional `osm` mit Ortsarten: zeigt passende Orte im Restgebiet |
 | `null` | Fotos, alles ohne Kartenbezug | – |
 
 ### Optionen
@@ -268,6 +269,9 @@ Aufzählung, jeder Abschnitt aus `sections` als eigener Block.
 { "label": "Stadtbezirksgrenze", "osm": "admin_border", "adminLevel": 9 }
 { "label": "Meeresspiegel", "appType": "elevation" }
 { "label": "Flussseite", "appType": "side", "osm": "river" }
+{ "label": "Länge des Stationsnamens", "osm": "station", "matchBy": "nameLength" }
+{ "label": "Landmasse", "appType": "area", "osm": "island" }
+{ "label": "Gotteshaus", "osm": "worship" }
 { "label": "Freie Wahl", "freeChoice": true }
 { "label": "1 km", "meters": 1000, "sizes": ["stadt"] }
 { "label": "Landmasse", "appType": null, "note": "Nicht auf der Karte auswertbar" }
@@ -277,6 +281,7 @@ Aufzählung, jeder Abschnitt aus `sections` als eigener Block.
 |---|---|
 | `osm` | eine Quellen-ID oder eine **Liste** – dann zählt das nächste Objekt irgendeiner Quelle |
 | `match` | bei `nearest`: `point` (Orte als Punkte, schnell) oder `shape` (Linien/Flächen als Geometrie) |
+| `matchBy` | bei `nearest`: `nameLength` – gleich lange Namen statt desselben Orts |
 | `adminLevel` | Verwaltungsebene (2–12) für `area` oder `admin_border` |
 | `freeChoice` | die fragende Seite wählt das Objekt beim Fragen selbst |
 | `meters` | Distanz für `radius`/`thermo`, Suchradius bei Tentakeln |

@@ -68,6 +68,7 @@ export function createMask(L, map, opts = {}) {
         type: f.type,
         pts: (f.points || []).map((p) => map.project(p, zoom)),
       })),
+      rings: (s.rings || []).map((r) => r.map((p) => map.project(p, zoom))),
       parts: (s.parts || []).map((part) => ({
         pts: part.line.map((p) => map.project(p, zoom)),
         ref: map.project(part.excludeRef, zoom),
@@ -83,7 +84,7 @@ export function createMask(L, map, opts = {}) {
       }
       const all = it.features && it.features.length
         ? it.features.flatMap((f) => f.pts)
-        : it.pts;
+        : it.rings.length ? it.rings.flat() : it.pts;
       it.box = boxOf(all);
     }
     if (areaRing) {
@@ -239,7 +240,8 @@ export function createMask(L, map, opts = {}) {
     mctx.fillStyle = MASK_COLOR;
 
     for (const item of projectAll()) {
-      const hatGeometrie = item.pts.length || item.raster || (item.parts && item.parts.length) || (item.features && item.features.length);
+      const hatGeometrie = item.pts.length || item.raster || (item.parts && item.parts.length)
+        || (item.features && item.features.length) || item.rings.length;
       if (!hatGeometrie) continue;
 
       // Halbebenen und Ausstanzungen reichen über den Rand hinaus – die lassen sich
@@ -253,7 +255,7 @@ export function createMask(L, map, opts = {}) {
         continue;
       }
 
-      if (item.box && (item.kind === 'ring' || item.kind === 'buffer')) {
+      if (item.box && (item.kind === 'ring' || item.kind === 'rings' || item.kind === 'buffer')) {
         const pad = item.kind === 'buffer' ? item.radiusM * pxPerM : 0;
         const sichtbar = !(item.box.x1 + pad < org.x || item.box.x0 - pad > org.x + size.x
           || item.box.y1 + pad < org.y || item.box.y0 - pad > org.y + size.y);
@@ -284,6 +286,11 @@ export function createMask(L, map, opts = {}) {
           sctx.globalCompositeOperation = 'destination-out';
           drawBuffer(sctx, item, org, pxPerM);
         }
+      } else if (item.kind === 'rings') {
+        // Vereinigung mehrerer Flächen bleibt frei: alles füllen, jede Fläche ausstanzen
+        sctx.fillRect(0, 0, size.x, size.y);
+        sctx.globalCompositeOperation = 'destination-out';
+        for (const r of item.rings) { tracePath(sctx, r, org); sctx.fill(); }
       } else if (item.kind === 'cutout') {
         // Schnitt der Halbebenen: alles füllen, dann jede Gegenseite ausstanzen
         sctx.fillRect(0, 0, size.x, size.y);
@@ -318,7 +325,8 @@ export function createMask(L, map, opts = {}) {
       ectx.strokeStyle = item.area ? 'rgba(226,232,240,.85)' : (item.color || 'rgba(148,197,255,.75)');
       ectx.lineWidth = item.area ? 2 : 1.5;
       ectx.setLineDash(item.area ? [6, 4] : []);
-      const strokes = [item.kind === 'ring' ? [...item.pts, item.pts[0]] : item.pts];
+      const strokes = item.kind === 'rings' ? item.rings.map((r) => [...r, r[0]])
+        : [item.kind === 'ring' ? [...item.pts, item.pts[0]] : item.pts];
       for (const line of strokes) {
         ectx.beginPath();
         line.forEach((p, i) => {
