@@ -8,7 +8,7 @@
 import { destination } from './geo.js';
 import { powerSaving } from './state.js';
 
-const MASK_COLOR = '#0b1020';
+const MASK_COLOR = '#0b0c0e';
 
 export function createMask(L, map, opts = {}) {
   const pane = map.getPanes().overlayPane;

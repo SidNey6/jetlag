@@ -33,7 +33,13 @@ Fragekategorien mit allen zulässigen Werten. Mehr dazu weiter unten.
 | Nächster Ort | „Welchem Ort bist du am nächsten?" | die Umgebung aller anderen Orte |
 | Nächster Ort (verneint) | „Nein, mein nächstes X ist ein anderes" | genau die Umgebung des genannten Orts |
 | Gebiet | „Bist du in diesem Dorf/Bezirk?" | Innen- oder Außenfläche |
+| Flussseite | „Bist du auf derselben Seite des Rheins wie ich?" | das andere Ufer bzw. das eigene |
 | Richtung | „Liegst du im Sektor NO?" | der Sektor oder sein Rest |
+| Höhe | „Bist du näher am Meeresspiegel als ich?" | alles, was höher bzw. tiefer liegt |
+
+Für die **Flussseite** lädt die App den nächsten Fluss aus OpenStreetMap und bestimmt die
+Seiten aus der Fließrichtung – Flüsse sind dort immer flussabwärts gezeichnet. Das stimmt
+auch hinter Mäandern und Kurven; einzugeben ist nur die Antwort.
 
 Fragen lassen sich einzeln abschalten, bearbeiten und rückgängig machen.
 
@@ -47,8 +53,27 @@ Die Voreinstellungen sind auf **kleine Spielflächen** ausgelegt – Stadt und U
 Umkreis von Bonn: Radius-Vorgaben ab 250 m, Spielgebiet ab 1 km, Ortssuche ab 300 m.
 Beides ist unter *Mehr → Einstellungen* frei änderbar (Radius-Vorgaben, Radiusringe).
 
+**Endgame** – erkannt, an welcher Station sich die versteckende Seite aufhält? Lange auf
+die Haltestelle auf der Karte drücken → *Endgame an …*. Die App legt den Radius aus dem
+Regelwerk um die Haltestelle, dunkelt alles außerhalb ab und lädt alle Straßen und Wege im
+Radius. Ab dann wird jeder Weg aufgezeichnet, wie bei Strava: abgelaufene Straßen werden
+orange, offene bleiben grau, oben steht, wie viel Prozent schon abgesucht sind. So lässt
+sich die Zone systematisch abgehen, ohne Straßen doppelt oder gar nicht zu laufen.
+
+Bei ausgeschaltetem Bildschirm ortet kein Browser – das ist eine Grenze von Web-Apps auf
+iOS wie Android. Drei Auswege:
+- **Taschenmodus:** Der Bildschirm bleibt an, zeigt aber nur Schwarz (auf OLED-Displays
+  kostet das kaum Strom). Berührungen in der Hosentasche werden abgefangen; entsperrt wird
+  durch langes Drücken.
+- **Lücken schließen:** Kommt nach einer Pause ein Punkt weit entfernt an, nimmt die App
+  den kürzesten Weg über das Straßennetz an und markiert ihn gestrichelt als „vermutlich".
+- **GPX-Import:** Eine Tracking-App, die im Hintergrund aufzeichnen darf, liefert die
+  lückenlose Spur; sie lässt sich als GPX übernehmen. So lassen sich auch die Wege
+  von Mitspielern zusammenführen.
+
 **Weiteres**
-- Beliebig viele Timer (Countdown und Stoppuhr), Alarm mit Ton und Vibration, Display bleibt an
+- Beliebig viele Timer (Countdown und Stoppuhr), Zeit abziehen, hinzufügen oder direkt
+  setzen, Alarm mit Ton und Vibration, Display bleibt an
 - Teams, Runden mit Zeitmessung, Wertung und automatisches Protokoll
 - Würfel W2–W20 und eigene Listen für Karten, Flüche oder Aufgaben
 - OpenStreetMap-Abfragen: Orte im Umkreis, nächstgelegenes Objekt, sowie eine Gebietssuche
@@ -60,7 +85,7 @@ Beides ist unter *Mehr → Einstellungen* frei änderbar (Radius-Vorgaben, Radiu
 
 ## Offline spielen
 
-Unter *Mehr → Offline-Vorrat → Gebiet vorbereiten* lädt die App einmal alles herunter, was
+Unter *Mehr → Offline-Vorrat → Spielgebiet vorbereiten* lädt die App einmal alles herunter, was
 die Fragen später brauchen:
 
 - die Orte jeder Kategorie, die im Regelwerk vorkommt (Museen, Bibliotheken, Bahnhöfe …)
@@ -104,14 +129,17 @@ Unabhängig davon spart die App Strom, wo es nichts kostet:
 Die Spielregeln stecken nicht im Code, sondern in `rules/lifack.json`. Mitgeliefert sind
 die Werte von [lifack.ch](https://www.lifack.ch/docs/quick_start_guide/) – einer
 inoffiziellen Fan-Umsetzung von *Jet Lag: Hide and Seek*, nicht mit Jet Lag, Nebula oder
-Wendover Productions verbunden. Originalmaße sind Meilen; in der Datei stehen Meter, die
-App zeigt beides an.
+Wendover Productions verbunden. Die Originalmaße in Meilen sind auf runde metrische Werte
+umgestellt (¼ Meile → 400 m, 1 Meile → 1,6 km, 3 Meilen → 5 km, 10 Meilen → 16 km); die
+App rechnet und zeigt durchgehend in Metern und Kilometern.
 
 | Spielgröße | Versteckzeit | Versteckzone | Antwortfrist | Fotofrist |
 |---|---|---|---|---|
-| Klein | 30 Min | ¼ Meile (402 m) | 5 Min | 10 Min |
-| Mittel | 60 Min | ¼ Meile (402 m) | 5 Min | 10 Min |
-| Groß | 180 Min | ½ Meile (805 m) | 5 Min | 20 Min |
+| Klein | 30 Min | 400 m | 5 Min | 10 Min |
+| Mittel | 60 Min | 400 m | 5 Min | 10 Min |
+| Groß | 180 Min | 800 m | 5 Min | 20 Min |
+
+Ergänzt ist eine Matching-Frage, die lifack.ch nicht hat: **Flussseite**.
 
 Die sechs Kategorien mit ihren Ziehwerten: Matching und Measuring je *3 ziehen, 1 behalten*,
 Thermometer und Radar *2 ziehen, 1 behalten*, Tentacles *4 ziehen, 2 behalten*, Photos
@@ -175,6 +203,7 @@ steht in **[rules/SCHEMA.md](rules/SCHEMA.md)**. Ausdrücken lassen sich unter a
 | Linien und Flächen statt Punkte beim Matching | `options[].match: "shape"` |
 | Stadtteil, Stadtbezirk, Gemeinde – ohne Auswahl von Hand | `options[].adminLevel` |
 | Höhe über dem Meeresspiegel | `appType: "elevation"` |
+| Gleiche Seite eines Flusses | `appType: "side"` mit `osm: "river"` |
 | Frei wählbares Objekt | `options[].freeChoice` |
 
 Die App prüft jede Datei vor dem Übernehmen und nennt bei Fehlern die Stelle, etwa

@@ -11,11 +11,13 @@ import * as More from './more.js';
 import { consumeHash } from './share.js';
 import * as Rules from './rules.js';
 import * as Zone from './zone.js';
+import * as Endgame from './endgame.js';
+import { findStopsNear } from './overpass.js';
 import { initBundle } from './bundle.js';
-import { el, openSheet, promptSheet, toast } from './ui/ui.js';
+import { el, clear, openSheet, promptSheet, toast, icon, row } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.5.0';
+window.__JL_VERSION__ = 'v1.6.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -23,6 +25,8 @@ const PANELS = {
 };
 
 function showTab(name) {
+  // Nochmal auf "Mehr" tippen führt zurück zur Übersicht
+  if (name === 'more' && getState().ui.tab === 'more') More.resetPage();
   for (const [key, id] of Object.entries(PANELS)) {
     document.getElementById(id).hidden = key !== name;
   }
@@ -92,37 +96,65 @@ function refreshUndo() {
 
 /* ---------- Menü für einen Kartenpunkt ---------- */
 
+// Langes Drücken auf die Karte. Liegt dort eine Haltestelle, steht ganz oben der
+// Endgame-Start: genau dann, wenn man die Station des Versteckenden erkannt hat.
 function pointMenu(p) {
-  const unit = getState().settings.unit;
   const me = Loc.current();
   openSheet('Punkt auf der Karte', (body, close) => {
-    body.append(el('div', { class: 'hint mono', text: `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` }));
-    if (me) {
-      body.append(el('div', { class: 'card-sub', text: `von dir: ${formatDistance(distance(me, p), unit)} · ${formatBearing(bearing(me, p))}` }));
-    }
-    const action = (label, fn) => el('button', { class: 'btn btn-wide', onclick: () => { close(); fn(); } }, label);
-    body.append(
-      action('📍 Marker setzen', async () => {
+    body.append(el('div', { class: 'coords' },
+      `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`,
+      me ? ` · ${formatDistance(distance(me, p))} ${formatBearing(bearing(me, p))} von dir` : ''));
+
+    // Die Suche kann bei ausgelastetem Overpass dauern; "hier starten" geht sofort
+    const searching = row({ icon: 'search', title: 'Suche Haltestellen hier …' });
+    const stops = el('div', { class: 'list' }, searching,
+      row({
+        icon: 'endgame', title: 'Endgame an diesem Punkt', sub: 'Wenn die Haltestelle genau hier liegt',
+        onClick: () => { close(); Endgame.openStartSheet({ lat: p.lat, lng: p.lng, name: 'Haltestelle', distance: 0 }); },
+      }));
+    body.append(el('section', { class: 'group' }, el('div', { class: 'group-title', text: 'Endgame' }), stops));
+    findStops(p).then((found) => {
+      if (!found.length) {
+        searching.replaceWith(row({ icon: 'search', title: 'Keine Haltestelle in der Nähe' }));
+        return;
+      }
+      searching.replaceWith(...found.slice(0, 3).map((st) => row({
+        icon: Endgame.stopIcon(st.kind), title: `Endgame an ${st.name}`,
+        sub: [st.kindLabel, `${formatDistance(st.distance)} entfernt`].filter(Boolean).join(' · '),
+        onClick: () => { close(); Endgame.openStartSheet(st); },
+      })));
+    }).catch((e) => searching.replaceWith(row({ icon: 'info', title: 'Haltestellen nicht ladbar', sub: String(e.message || e) })));
+
+    const action = (ic, title, fn, sub) => row({ icon: ic, title, sub, onClick: () => { close(); fn(); } });
+    body.append(el('div', { class: 'list' },
+      action('pin', 'Marker setzen', async () => {
         const name = await promptSheet('Marker', { label: 'Name', placeholder: 'Verdachtspunkt' });
         MapMod.addMarkerAt(p, name || 'Marker');
       }),
-      action('⌖ Als meine Position setzen', () => { Loc.setManual(p); MapMod.render(); toast('Position manuell gesetzt'); syncLocButtons(); }),
-      action('◎ Radius-Frage von hier', () => Q.openQuestionForm('radius', null, { at: p })),
-      action('▦ Spielgebiet um diesen Punkt', () => More.openAreaSheet()),
-      action(`⭕ Versteckzone hier${zoneLabel()}`, () => Zone.setHidingZone(p)),
-      action('📌 Versteckpunkt hier', () => Zone.setHidingSpot(p)),
-      action('📋 Koordinaten kopieren', async () => {
+      action('crosshair', 'Als meine Position setzen', () => { Loc.setManual(p); MapMod.render(); toast('Position manuell gesetzt'); syncLocButtons(); }),
+      action('radius', 'Radius-Frage von hier', () => Q.openQuestionForm('radius', null, { at: p })),
+      action('layers', 'Spielgebiet festlegen', () => More.openAreaSheet()),
+      action('zone', 'Versteckzone hier', () => Zone.setHidingZone(p), zoneLabel()),
+      action('mapPinned', 'Versteckpunkt hier', () => Zone.setHidingSpot(p)),
+      action('copy', 'Koordinaten kopieren', async () => {
         try { await navigator.clipboard.writeText(`${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`); toast('Kopiert', 'ok'); }
         catch (e) { toast('Kopieren nicht erlaubt', 'error'); }
-      }),
-    );
+      })));
     return [];
   });
 }
 
+// Fangradius nach Zoomstufe: etwa ein Fingerbreit auf dem Bildschirm
+function findStops(p) {
+  const map = MapMod.getMap();
+  const mProPixel = 156543.03 * Math.cos(p.lat * Math.PI / 180) / 2 ** map.getZoom();
+  const radius = Math.max(40, Math.min(250, mProPixel * 48));
+  return findStopsNear(p, radius);
+}
+
 function zoneLabel() {
   const r = Rules.hidingZoneRadius();
-  return r ? ` (${Zone.zoneSummary(r)})` : '';
+  return r ? Zone.zoneSummary(r) : null;
 }
 
 function syncLocButtons() {
@@ -151,18 +183,24 @@ async function registerSW() {
 function showUpdateToast(sw) {
   const root = document.getElementById('toast-root');
   const t = el('div', { class: 'toast' },
-    'Neue Version verfügbar ',
+    icon('refresh'), 'Neue Version verfügbar',
     el('button', {
-      class: 'btn btn-small', style: { marginLeft: '8px' },
+      class: 'btn btn-small btn-primary', style: { marginLeft: '6px' },
       onclick: () => { sw.postMessage({ type: 'SKIP_WAITING' }); location.reload(); },
     }, 'Neu laden'));
   root.append(t);
+}
+
+// Symbole in die statische Oberfläche einsetzen (data-icon im HTML)
+function placeIcons() {
+  document.querySelectorAll('[data-icon]').forEach((n) => n.prepend(icon(n.dataset.icon)));
 }
 
 /* ---------- Start ---------- */
 
 function boot() {
   load();
+  placeIcons();
   MapMod.initMap();
   MapMod.setPointMenuHandler(pointMenu);
   Loc.start();
@@ -175,7 +213,7 @@ function boot() {
   document.getElementById('btn-ask').addEventListener('click', () => Q.openQuestionPicker());
   document.getElementById('btn-ask-2').addEventListener('click', () => Q.openQuestionPicker());
   document.getElementById('btn-new-timer').addEventListener('click', () => Timers.openNewTimerSheet());
-  document.getElementById('btn-game-menu').addEventListener('click', () => showTab('more'));
+  document.getElementById('stat-endgame').addEventListener('click', () => Endgame.openEndgameSheet());
 
   document.getElementById('btn-follow').addEventListener('click', () => {
     MapMod.setFollow(!MapMod.isFollowing());
@@ -214,6 +252,7 @@ function boot() {
 
   // Offline-Vorrat kennen, bevor die erste Abfrage losläuft
   initBundle().catch(() => {});
+  Endgame.initEndgame();
 
   // Regelwerk nachladen; die Oberfläche läuft auch an, bevor es da ist
   Rules.loadRules()

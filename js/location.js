@@ -3,6 +3,8 @@
 // und man will Punkte prüfen, an denen man gerade nicht steht.
 
 const listeners = new Set();
+const fixListeners = new Set();
+const keepers = new Set(); // Gründe, das GPS trotz Einfrieren laufen zu lassen (Aufzeichnung)
 let watchId = null;
 let paused = false;   // vom Seitenwechsel angehalten
 let wanted = false;   // soll überhaupt geortet werden?
@@ -21,6 +23,21 @@ function emit() {
   for (const fn of listeners) {
     try { fn(c); } catch (e) { console.error(e); }
   }
+}
+
+// Rohe GPS-Fixes, unabhängig von eingefrorener oder manueller Position.
+// Für die Streckenaufzeichnung: die braucht jeden echten Punkt.
+export function onFix(fn) {
+  fixListeners.add(fn);
+  return () => fixListeners.delete(fn);
+}
+
+// Aufzeichnung läuft: GPS bleibt an und arbeitet genau, auch wenn die angezeigte
+// Position eingefroren ist oder der Sparmodus gewählt wurde.
+export function keepAlive(reason, on) {
+  const vorher = keepers.size > 0;
+  if (on) keepers.add(reason); else keepers.delete(reason);
+  if (vorher !== keepers.size > 0) { clearWatch(); resume(); }
 }
 
 export function current() {
@@ -63,8 +80,9 @@ export function isWatching() {
 }
 
 function resume() {
-  if (!wanted || paused || override || watchId != null || !navigator.geolocation) return;
-  const sparsam = accuracyMode === 'saving';
+  const aufzeichnung = keepers.size > 0;
+  if (!wanted || paused || (override && !aufzeichnung) || watchId != null || !navigator.geolocation) return;
+  const sparsam = accuracyMode === 'saving' && !aufzeichnung;
   watchId = navigator.geolocation.watchPosition(
     (pos) => {
       lastError = null;
@@ -77,7 +95,11 @@ function resume() {
         timestamp: pos.timestamp,
         source: 'gps',
       };
-      emit();
+      for (const fn of fixListeners) {
+        try { fn(live); } catch (e) { console.error(e); }
+      }
+      // Bei eingefrorener Position ändert ein neuer Fix nichts an der Anzeige
+      if (!override) emit();
     },
     (err) => {
       lastError = err.code === err.PERMISSION_DENIED
@@ -121,14 +143,14 @@ export function freeze() {
   const base = live || override;
   if (!base) return false;
   override = { ...base, source: 'frozen' };
-  clearWatch();
+  if (!keepers.size) clearWatch();
   emit();
   return true;
 }
 
 export function setManual(latlng) {
   override = { lat: latlng.lat, lng: latlng.lng, accuracy: null, timestamp: Date.now(), source: 'manual' };
-  clearWatch();
+  if (!keepers.size) clearWatch();
   emit();
 }
 

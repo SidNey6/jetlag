@@ -5,7 +5,7 @@
 <title>Jetlag Toolkit</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="description" content="Karten-, Fragen- und Timer-Werkzeugkasten für Verstecken-und-Suchen-Spiele">
-<meta name="theme-color" content="#0b1020">
+<meta name="theme-color" content="#0e0f11">
 <meta name="color-scheme" content="dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -25,21 +25,24 @@
     <div id="map"></div>
 
     <div class="map-top">
-      <button class="chip" id="btn-undo" title="Rückgängig" hidden>↶</button>
+      <button class="chip" id="btn-undo" title="Rückgängig" aria-label="Rückgängig" data-icon="undo" hidden></button>
+      <button class="chip chip-stat chip-endgame" id="stat-endgame" data-icon="endgame" hidden>
+        <div><b>–</b><span></span></div><i class="rec-dot"></i>
+      </button>
       <div class="chip chip-stat" id="stat-remaining" hidden><b>–</b><span>Restgebiet</span></div>
       <div class="chip chip-stat" id="stat-pos"><b id="pos-source">kein Fix</b><span id="pos-coords">–</span></div>
     </div>
 
     <div class="map-side">
-      <button class="fab" id="btn-follow" title="Position folgen">⌖</button>
-      <button class="fab" id="btn-freeze" title="Position einfrieren">❄</button>
-      <button class="fab" id="btn-measure" title="Messen">📏</button>
-      <button class="fab" id="btn-mask" title="Maske ein/aus">◐</button>
-      <button class="fab" id="btn-layers" title="Ebenen &amp; Gebiet">▤</button>
+      <button class="fab" id="btn-follow" title="Position folgen" aria-label="Position folgen" data-icon="follow"></button>
+      <button class="fab" id="btn-freeze" title="Position einfrieren" aria-label="Position einfrieren" data-icon="freeze"></button>
+      <button class="fab" id="btn-measure" title="Messen" aria-label="Messen" data-icon="measure"></button>
+      <button class="fab" id="btn-mask" title="Maske ein/aus" aria-label="Maske ein/aus" data-icon="mask"></button>
+      <button class="fab" id="btn-layers" title="Spielgebiet" aria-label="Spielgebiet" data-icon="layers"></button>
     </div>
 
     <div class="map-bottom">
-      <button class="btn btn-primary btn-wide" id="btn-ask">Frage auswerten</button>
+      <button class="btn btn-primary btn-wide" id="btn-ask" data-icon="plus">Frage auswerten</button>
     </div>
 
     <div class="measure-readout" id="measure-readout" hidden></div>
@@ -49,7 +52,7 @@
   <section class="panel" id="panel-questions" data-tab="questions" hidden>
     <header class="panel-head">
       <h1>Fragen</h1>
-      <button class="btn btn-small" id="btn-ask-2">Neue Frage</button>
+      <button class="icon-btn" id="btn-ask-2" aria-label="Neue Frage" title="Neue Frage" data-icon="plus"></button>
     </header>
     <div class="panel-body" id="constraint-list"></div>
   </section>
@@ -58,7 +61,7 @@
   <section class="panel" id="panel-timers" data-tab="timers" hidden>
     <header class="panel-head">
       <h1>Timer</h1>
-      <button class="btn btn-small" id="btn-new-timer">Neuer Timer</button>
+      <button class="icon-btn" id="btn-new-timer" aria-label="Neuer Timer" title="Neuer Timer" data-icon="plus"></button>
     </header>
     <div class="panel-body" id="timer-list"></div>
   </section>
@@ -67,23 +70,22 @@
   <section class="panel" id="panel-game" data-tab="game" hidden>
     <header class="panel-head">
       <h1>Spiel</h1>
-      <button class="btn btn-small" id="btn-game-menu">⋯</button>
     </header>
     <div class="panel-body" id="game-body"></div>
   </section>
 
   <!-- ---------- Mehr ---------- -->
   <section class="panel" id="panel-more" data-tab="more" hidden>
-    <header class="panel-head"><h1>Werkzeuge</h1></header>
+    <header class="panel-head" id="more-head"><h1>Mehr</h1></header>
     <div class="panel-body" id="more-body"></div>
   </section>
 
   <nav class="tabbar" id="tabbar">
-    <button data-go="map" class="active"><span>🗺</span>Karte</button>
-    <button data-go="questions"><span>❓</span>Fragen<i class="badge" id="badge-questions" hidden>0</i></button>
-    <button data-go="timers"><span>⏱</span>Timer<i class="badge" id="badge-timers" hidden>0</i></button>
-    <button data-go="game"><span>🏁</span>Spiel</button>
-    <button data-go="more"><span>⋯</span>Mehr</button>
+    <button data-go="map" class="active" data-icon="map">Karte</button>
+    <button data-go="questions" data-icon="questions">Fragen<i class="badge" id="badge-questions" hidden>0</i></button>
+    <button data-go="timers" data-icon="timer">Timer<i class="badge" id="badge-timers" hidden>0</i></button>
+    <button data-go="game" data-icon="game">Spiel</button>
+    <button data-go="more" data-icon="more">Mehr</button>
   </nav>
 </div>
 

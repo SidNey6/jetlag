@@ -8,7 +8,6 @@ export function emptyState() {
   return {
     v: SCHEMA,
     settings: {
-      unit: 'metric',
       maskOpacity: 0.62,
       tileUrl: '',
       keepAwake: true,
@@ -16,6 +15,12 @@ export function emptyState() {
       overpassTimeout: 25,
       powerSave: 'auto',
       gpsAccuracy: 'high',
+      // kleiner Marker im Mittelpunkt jeder Kreisfrage
+      showCenters: true,
+      // Endgame: wie nah ein GPS-Punkt an einer Straße liegen muss, damit sie als
+      // abgelaufen gilt, und ob Aufzeichnungslücken über das Straßennetz geschlossen werden
+      trackWidthM: 20,
+      trackFillGaps: true,
     },
     // null = mitgeliefertes Regelwerk (rules/lifack.json); sonst eigenes
     rules: null,
@@ -23,6 +28,9 @@ export function emptyState() {
     area: null,
     hidingZone: null,
     hidingSpot: null,
+    // Endgame der Suchenden (Haltestelle, Radius, Aufzeichnung); Spur und Straßennetz
+    // liegen getrennt davon, siehe endgame.js
+    endgame: null,
     constraints: [],
     markers: [],
     pois: [],
@@ -148,6 +156,8 @@ export function migrate(loaded) {
     delete s.presets.thermo; // gab es nie eine Oberfläche für; lag nur ungenutzt herum
   }
   if (!Array.isArray(s.presets.radius) || !s.presets.radius.length) s.presets.radius = base.presets.radius;
+  // Meilen gibt es nicht mehr – alles läuft metrisch
+  delete s.settings.unit;
   return s;
 }
 

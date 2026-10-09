@@ -256,6 +256,7 @@ Aufzählung, jeder Abschnitt aus `sections` als eigener Block.
 | `nearest` | Dasselbe/welches nächste X? | `osm` mit Orten oder Linien |
 | `area` | Im selben Gebiet? | `adminLevel` oder ein gewähltes Gebiet |
 | `elevation` | Näher am Meeresspiegel als ich? | nichts – Geländehöhe wird geladen |
+| `side` | Auf derselben Seite des Flusses? | `osm` mit `river` oder `stream` |
 | `null` | Fotos, alles ohne Kartenbezug | – |
 
 ### Optionen
@@ -266,6 +267,7 @@ Aufzählung, jeder Abschnitt aus `sections` als eigener Block.
 { "label": "Stadtteil", "appType": "area", "adminLevel": 10 }
 { "label": "Stadtbezirksgrenze", "osm": "admin_border", "adminLevel": 9 }
 { "label": "Meeresspiegel", "appType": "elevation" }
+{ "label": "Flussseite", "appType": "side", "osm": "river" }
 { "label": "Freie Wahl", "freeChoice": true }
 { "label": "1 km", "meters": 1000, "sizes": ["stadt"] }
 { "label": "Landmasse", "appType": null, "note": "Nicht auf der Karte auswertbar" }
@@ -346,8 +348,8 @@ von höchstens 20 × 20 Punkten über dem Spielgebiet. Gebäude und Brücken zä
 | `border_admin2` | Grenze Verwaltungsebene 2 | Linie |
 | `admin_border` | Verwaltungsgrenze (braucht `adminLevel`) | Linie |
 | `coastline` | Küstenlinie | Linie |
-| `river` | Fluss | Linie |
-| `stream` | Fluss/Bach | Linie |
+| `river` | Fluss | Linie, mit Fließrichtung – auch für `side` |
+| `stream` | Fluss/Bach | Linie, mit Fließrichtung – auch für `side` |
 | `water` | Gewässer | Punkt/Fläche |
 | `lake` | See | Punkt/Fläche |
 | `mountain` | Berg | Punkt |

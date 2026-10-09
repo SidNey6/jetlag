@@ -242,6 +242,75 @@ export function distanceToFeatures(p, features, limit = Infinity) {
   return best;
 }
 
+/* ---------- Seite einer gerichteten Linie ---------- */
+// "Bist du auf derselben Flussseite wie ich?" Flüsse sind in OpenStreetMap immer in
+// Fließrichtung gezeichnet. Damit hat jeder Punkt eine eindeutige Seite: links oder
+// rechts der nächstgelegenen Stelle des Flusses. Das gilt auch hinter Mäandern und
+// neben Seitenarmen, solange die Richtung stimmt – deshalb nur für Linien mit
+// verlässlicher Richtung (sources.js: directed).
+//
+// Liegt die nächste Stelle genau auf einem Knick (oder dem Übergang zwischen zwei
+// Teilstücken), entscheidet die Summe der Richtungen aller dort anliegenden Stücke.
+// Nur ein Stück zu nehmen ergäbe außen an jeder Kurve die falsche Seite.
+//
+// Ergebnis: side +1 = links, −1 = rechts (in Linienrichtung), distance in Metern.
+export function sideOfLines(p, features) {
+  if (!features || !features.length) return null;
+  const mLng = metersPerDegLng(p.lat);
+  let best = Infinity;
+  // Kandidaten der aktuell besten Entfernung: Lotfußpunkt und Richtung je Stück
+  let hits = [];
+  for (const f of features) {
+    const pts = f.points;
+    if (f.type !== 'line' || !pts || pts.length < 2) continue;
+    if (pts.length > 2 && boxLowerBound(p, featureBox(f), mLng) > Math.sqrt(best) + 0.01) continue;
+    let ax = lngDelta(pts[0].lng, p.lng) * mLng;
+    let ay = (pts[0].lat - p.lat) * M_PER_DEG_LAT;
+    for (let i = 1; i < pts.length; i++) {
+      const bx = lngDelta(pts[i].lng, p.lng) * mLng;
+      const by = (pts[i].lat - p.lat) * M_PER_DEG_LAT;
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      if (len2 > 0) {
+        let t = -(ax * dx + ay * dy) / len2;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        const cx = ax + t * dx, cy = ay + t * dy;
+        const d2 = cx * cx + cy * cy;
+        if (d2 < best - 1e-6) {
+          best = d2;
+          hits = [{ cx, cy, dx, dy, len: Math.sqrt(len2), t }];
+        } else if (d2 <= best + 1e-6) {
+          hits.push({ cx, cy, dx, dy, len: Math.sqrt(len2), t });
+        }
+      }
+      ax = bx; ay = by;
+    }
+  }
+  if (!hits.length) return null;
+
+  const h = hits[0];
+  const distanceM = Math.sqrt(best);
+  // Vektor vom Lotfußpunkt zum Punkt p (p liegt im Ursprung)
+  const vx = -h.cx, vy = -h.cy;
+  let tx, ty;
+  const amKnick = hits.length > 1 && hits.every((x) => (x.t === 0 || x.t === 1)
+    && Math.abs(x.cx - h.cx) < 0.01 && Math.abs(x.cy - h.cy) < 0.01);
+  if (amKnick) {
+    tx = 0; ty = 0;
+    for (const x of hits) { tx += x.dx / x.len; ty += x.dy / x.len; }
+    if (Math.abs(tx) < 1e-9 && Math.abs(ty) < 1e-9) { tx = h.dx; ty = h.dy; }
+  } else {
+    tx = h.dx; ty = h.dy;
+  }
+  const cross = tx * vy - ty * vx;
+  return {
+    side: cross > 0 ? 1 : (cross < 0 ? -1 : 0),
+    distance: distanceM,
+    // Himmelsrichtung von der Linie zum Punkt – für "du bist östlich des Rheins"
+    bearing: (Math.atan2(vx, vy) / D2R + 360) % 360,
+  };
+}
+
 export function boundsOf(points) {
   let s = 90, n = -90, w = 180, e = -180;
   for (const p of points) {
@@ -253,23 +322,18 @@ export function boundsOf(points) {
   return { south: s, north: n, west: w, east: e };
 }
 
-export const MI = 1609.344;
-
 // Deutsche Schreibweise: Dezimalkomma
 function de(n, digits) {
   return n.toFixed(digits).replace('.', ',');
 }
 
-export function formatDistance(m, unit = 'metric') {
+// Unter einem Kilometer in Metern, darüber in Kilometern.
+export function formatDistance(m) {
   if (!isFinite(m)) return '–';
-  if (unit === 'imperial') {
-    const mi = m / MI;
-    if (mi < 0.2) return `${Math.round(m / 0.3048)} ft`;
-    return `${de(mi, mi < 10 ? 2 : 1)} mi`;
-  }
   if (m < 1000) return `${Math.round(m)} m`;
   const km = m / 1000;
-  return `${de(km, km < 10 ? 2 : 1)} km`;
+  // "1 km" statt "1,00 km": Nachkommastellen nur, wenn sie etwas aussagen
+  return `${de(km, km < 10 ? 2 : 1).replace(/,?0+$/, '')} km`;
 }
 
 export function formatBearing(deg) {

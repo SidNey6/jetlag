@@ -3,7 +3,7 @@
 // Ein Scanner im Browser wäre der Umweg: Safari kennt BarcodeDetector nicht.
 
 import { getState, replaceState, update } from './state.js';
-import { el, clear, openSheet, confirmSheet, toast } from './ui/ui.js';
+import { el, clear, openSheet, confirmSheet, toast, button } from './ui/ui.js';
 
 const B64 = { to: bytesToB64url, from: b64urlToBytes };
 
@@ -91,21 +91,13 @@ export function openShareSheet() {
       out.append(
         el('div', { class: 'hint mono', style: { wordBreak: 'break-all', maxHeight: '72px', overflow: 'auto' }, text: url }),
         el('div', { class: 'row row-wrap' },
-          el('button', {
-            class: 'btn btn-small grow',
-            onclick: async () => {
-              try { await navigator.clipboard.writeText(url); toast('Link kopiert', 'ok'); }
-              catch (e) { toast('Kopieren nicht erlaubt', 'error'); }
-            },
-          }, '🔗 Link kopieren'),
-          navigator.share ? el('button', {
-            class: 'btn btn-small grow',
-            onclick: () => navigator.share({ title: 'Jetlag-Spielstand', url }).catch(() => {}),
-          }, '📤 Teilen') : null,
-          el('button', {
-            class: 'btn btn-small grow',
-            onclick: () => downloadJson(shareablePayload(scope)),
-          }, '💾 Als Datei'),
+          button('link', 'Link kopieren', async () => {
+            try { await navigator.clipboard.writeText(url); toast('Link kopiert', 'ok'); }
+            catch (e) { toast('Kopieren nicht erlaubt', 'error'); }
+          }, 'btn btn-small grow'),
+          navigator.share ? button('share', 'Teilen',
+            () => navigator.share({ title: 'Jetlag-Spielstand', url }).catch(() => {}), 'btn btn-small grow') : null,
+          button('download', 'Als Datei', () => downloadJson(shareablePayload(scope)), 'btn btn-small grow'),
         ),
         el('div', { class: 'hint', text: `${(url.length / 1024).toFixed(1).replace('.', ',')} kB Link` }),
       );

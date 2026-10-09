@@ -1,13 +1,16 @@
-// "Mehr": Spielgebiet, Werkzeuge, Offline-Karten, Teilen, Einstellungen.
+// "Mehr": Regelwerk, Spielgebiet, Endgame, Offline-Vorrat, Werkzeuge, Spielstand und
+// Einstellungen – als gruppierte Liste mit Unterseiten statt einer Wand aus Knöpfen.
 
 import { getState, update, replaceState, emptyState, uid, powerSaving } from './state.js';
 import * as C from './constraints.js';
 import * as Loc from './location.js';
 import * as MapMod from './map.js';
-import { drawPolygon, pointField, unitSuffix, distanceField } from './questions.js';
+import { drawPolygon, pointField, distanceField } from './questions.js';
 import { areaPickerSheet } from './overpass.js';
 import { formatDistance } from './geo.js';
-import { el, clear, append, openSheet, confirmSheet, promptSheet, toast } from './ui/ui.js';
+import {
+  el, clear, append, openSheet, confirmSheet, promptSheet, toast, icon, group, row, toggleSwitch, button,
+} from './ui/ui.js';
 import { openDiceSheet, openListsSheet } from './random.js';
 import { openShareSheet, openImportSheet } from './share.js';
 import { openTilesSheet, clearTileCache, cacheStats } from './tiles.js';
@@ -15,208 +18,253 @@ import { bundleMeta, bundleStats, clearBundle } from './bundle.js';
 import { prepareArea, planSteps, estimateTiles } from './prefetch.js';
 import { exportText } from './rounds.js';
 import * as Rules from './rules.js';
+import * as Endgame from './endgame.js';
 import { zoneSummary } from './zone.js';
 import { PHASE_LABEL } from './phases.js';
 import { createTimer } from './timers.js';
 
+/* ---------- Seiten ---------- */
+
+const PAGES = {
+  root: { title: 'Mehr', build: rootPage },
+  settings: { title: 'Einstellungen', build: settingsPage },
+  rules: { title: 'Regelwerk', build: rulesPage },
+  offline: { title: 'Offline-Vorrat', build: offlinePage },
+};
+let page = 'root';
+
+export function openPage(name) {
+  page = PAGES[name] ? name : 'root';
+  render();
+  const body = document.getElementById('more-body');
+  if (body) body.scrollTop = 0;
+}
+
+export function resetPage() {
+  page = 'root';
+}
+
 export function render() {
   const host = document.getElementById('more-body');
   if (!host || document.getElementById('panel-more').hidden) return;
-  const s = getState();
+  const head = document.getElementById('more-head');
+  clear(head);
+  if (page !== 'root') {
+    head.append(el('div', { style: { display: 'flex', flexDirection: 'column', flex: '1' } },
+      el('button', { class: 'back', onclick: () => openPage('root') }, icon('chevronLeft'), 'Mehr'),
+      el('h1', { text: PAGES[page].title })));
+  } else {
+    head.append(el('h1', { text: 'Mehr' }));
+  }
   clear(host);
+  PAGES[page].build(host);
+}
 
-  /* Regelwerk */
-  host.append(rulesCard());
+function rootPage(host) {
+  const s = getState();
+  const rules = Rules.getRules();
+  const size = Rules.currentSize();
+  const eg = Endgame.summary();
+  const meta = bundleMeta();
 
-  /* Spielgebiet */
-  host.append(el('div', { class: 'card' },
-    el('div', { class: 'card-title', text: 'Spielgebiet' }),
-    el('div', { class: 'card-sub', text: areaLabel(s.area) }),
-    el('div', { class: 'hint', text: 'Begrenzt die Karte und ist die Basis für die Restgebiet-Anzeige.' }),
-    el('div', { class: 'row row-wrap' },
-      el('button', { class: 'btn btn-small', onclick: () => openAreaSheet() }, 'Festlegen'),
-      s.area ? el('button', { class: 'btn btn-small', onclick: () => { MapMod.fitArea(); goMap(); } }, 'Anzeigen') : null,
-      s.area ? el('button', {
-        class: 'btn btn-small btn-danger',
-        onclick: () => { update((st) => { st.area = null; }, 'Spielgebiet entfernt'); MapMod.render(); render(); },
-      }, 'Entfernen') : null,
-    ),
-  ));
-
-  /* Werkzeuge */
-  host.append(el('div', { class: 'card' },
-    el('div', { class: 'card-title', text: 'Werkzeuge' }),
-    el('div', { class: 'row row-wrap' },
-      el('button', { class: 'btn btn-small', onclick: openDiceSheet }, '🎲 Würfel'),
-      el('button', { class: 'btn btn-small', onclick: openListsSheet }, '🎴 Listen'),
-      el('button', { class: 'btn btn-small', onclick: randomSpot }, '📍 Zufallspunkt'),
-      el('button', { class: 'btn btn-small', onclick: openAnalysis }, '📊 Fragen-Analyse'),
-    ),
-  ));
-
-  /* Offline */
-  const offlineSlot = el('div', {});
-  host.append(offlineSlot);
-  offlineCard().then((card) => { clear(offlineSlot).append(card); });
-
-  /* Teilen */
-  host.append(el('div', { class: 'card' },
-    el('div', { class: 'card-title', text: 'Spielstand' }),
-    el('div', { class: 'row row-wrap' },
-      el('button', { class: 'btn btn-small', onclick: openShareSheet }, '📤 Teilen / QR'),
-      el('button', { class: 'btn btn-small', onclick: openImportSheet }, '📥 Importieren'),
-      el('button', {
-        class: 'btn btn-small',
-        onclick: async () => {
+  host.append(
+    group('Spiel',
+      row({
+        icon: 'book', title: 'Regelwerk',
+        sub: rules ? `${rules.name}${size ? ` · ${size.label}` : ''}${Rules.isCustom() ? ' · eigenes' : ''}` : 'wird geladen …',
+        onClick: () => openPage('rules'),
+      }),
+      row({ icon: 'layers', title: 'Spielgebiet', sub: areaLabel(s.area), onClick: () => openAreaSheet() }),
+      row({
+        icon: 'endgame', title: 'Endgame',
+        sub: eg ? `${eg.title} · ${eg.line}` : 'Haltestelle erkannt? Lange auf der Karte drücken',
+        onClick: () => (eg ? Endgame.openEndgameSheet() : Endgame.openStopPicker()),
+      }),
+      row({
+        icon: 'offline', title: 'Offline-Vorrat',
+        sub: meta ? `bereit seit ${new Date(meta.at).toLocaleDateString('de-DE')}` : 'nichts vorbereitet',
+        onClick: () => openPage('offline'),
+      })),
+    group('Werkzeuge',
+      row({ icon: 'dice', title: 'Würfel und Münze', onClick: openDiceSheet }),
+      row({ icon: 'cards', title: 'Eigene Listen', sub: 'Karten, Flüche, Aufgaben', onClick: openListsSheet }),
+      row({ icon: 'shuffle', title: 'Zufallspunkt im Restgebiet', onClick: randomSpot }),
+      row({ icon: 'chart', title: 'Fragen-Analyse', sub: 'Welcher Radius teilt das Restgebiet am besten?', onClick: openAnalysis })),
+    group('Spielstand',
+      row({ icon: 'share', title: 'Teilen oder QR-Code', onClick: openShareSheet }),
+      row({ icon: 'download', title: 'Spielstand importieren', onClick: openImportSheet }),
+      row({
+        icon: 'log', title: 'Protokoll kopieren',
+        onClick: async () => {
           try { await navigator.clipboard.writeText(exportText()); toast('Protokoll kopiert', 'ok'); }
           catch (e) { openSheet('Protokoll', (body) => { body.append(el('textarea', { style: { minHeight: '50vh' } }, exportText())); return []; }); }
         },
-      }, '📋 Protokoll'),
-    ),
-  ));
+      })),
+    group(null,
+      row({ icon: 'settings', title: 'Einstellungen', onClick: () => openPage('settings') })),
+  );
+}
 
-  /* Einstellungen */
-  host.append(el('div', { class: 'card' },
-    el('div', { class: 'card-title', text: 'Einstellungen' }),
-    settingRow('Einheiten', el('div', { class: 'seg' },
-      el('button', { class: s.settings.unit === 'metric' ? 'on' : '', onclick: (e) => { setUnit('metric'); segOn(e); } }, 'km'),
-      el('button', { class: s.settings.unit === 'imperial' ? 'on' : '', onclick: (e) => { setUnit('imperial'); segOn(e); } }, 'mi'))),
-    settingRow('Maskenstärke', rangeInput(s.settings.maskOpacity, 0.2, 0.92, 0.02, (v) => {
-      update((st) => { st.settings.maskOpacity = v; });
-      MapMod.render();
-    })),
-    settingRow('Display anlassen', toggle(s.settings.keepAwake, (v) => update((st) => { st.settings.keepAwake = v; }))),
-    settingRow('Stromsparmodus', el('div', { class: 'seg' },
-      ...[['auto', 'Auto'], ['on', 'An'], ['off', 'Aus']].map(([v, label]) => el('button', {
-        class: (s.settings.powerSave || 'auto') === v ? 'on' : '',
-        onclick: (e) => {
-          update((st) => { st.settings.powerSave = v; }, null);
-          segOn(e);
-          render();
-          toast(powerSaving() ? 'Sparmodus aktiv' : 'Sparmodus aus');
-        },
-      }, label)))),
-    el('div', { class: 'hint', text: powerSaving()
-      ? 'Aktiv: weniger Stichproben, gröbere Maske, keine Kartenanimationen.'
-      : 'Aus: volle Auflösung und Genauigkeit.' }),
-    settingRow('GPS', el('div', { class: 'seg' },
-      ...[['high', 'Genau'], ['saving', 'Sparsam']].map(([v, label]) => el('button', {
-        class: (s.settings.gpsAccuracy || 'high') === v ? 'on' : '',
-        onclick: (e) => {
-          update((st) => { st.settings.gpsAccuracy = v; }, null);
-          Loc.setAccuracyMode(v);
-          segOn(e);
-        },
-      }, label)))),
-    el('div', { class: 'hint', text: 'Sparsam holt seltener und gröber – reicht, solange ihr euch nicht auf wenige Meter genau verortet. Der Frier-Knopf auf der Karte schaltet das GPS ganz ab.' }),
-    el('div', { class: 'row row-wrap' },
-      el('button', {
-        class: 'btn btn-small',
-        onclick: () => editDistanceList('Radiusringe', s.settings.radiusRings,
-          'Ringe, die im Messmodus um deine Position liegen',
-          (list) => update((st) => { st.settings.radiusRings = list; }, 'Radiusringe geändert')),
-      }, 'Radiusringe'),
-      el('button', {
-        class: 'btn btn-small',
-        onclick: () => editDistanceList('Radius-Vorgaben', s.presets.radius,
-          'Werte für die Schnellauswahl bei Radius-Fragen',
-          (list) => update((st) => { st.presets.radius = list; }, 'Radius-Vorgaben geändert')),
-      }, 'Radius-Vorgaben'),
-      el('button', {
-        class: 'btn btn-small',
-        onclick: async () => {
-          const v = await promptSheet('Eigene Kachelquelle', {
+/* ---------- Einstellungen ---------- */
+
+function settingsPage(host) {
+  const s = getState();
+  const st = s.settings;
+  const set = (fn, label = null) => update((x) => fn(x.settings), label);
+
+  const kacheln = st.tileUrl ? 'eigene' : 'OpenStreetMap';
+  const meter = (list) => list.map((m) => formatDistance(m)).join(', ');
+  const notif = !('Notification' in window) ? 'nicht verfügbar'
+    : Notification.permission === 'granted' ? 'erlaubt'
+      : Notification.permission === 'denied' ? 'blockiert' : 'aus';
+
+  host.append(
+    group('Karte',
+      row({
+        icon: 'radius', title: 'Mittelpunkte anzeigen', sub: 'Kleiner Marker in der Mitte jeder Kreisfrage',
+        control: toggleSwitch(st.showCenters !== false, (v) => { set((x) => { x.showCenters = v; }); MapMod.render(); }),
+      }),
+      row({
+        icon: 'mask', title: 'Abdunkelung', sub: 'Wie stark ausgeschlossene Flächen verdeckt werden',
+        below: rangeInput(st.maskOpacity, 0.2, 0.92, 0.02, (v) => { set((x) => { x.maskOpacity = v; }); MapMod.render(); }),
+      }),
+      row({
+        icon: 'map', title: 'Kartenquelle', value: kacheln,
+        onClick: async () => {
+          const v = await promptSheet('Kartenquelle', {
             label: 'URL-Vorlage mit {z}/{x}/{y}, leer = OpenStreetMap',
-            value: s.settings.tileUrl,
-            placeholder: 'https://…/{z}/{x}/{y}.png',
+            value: st.tileUrl, placeholder: 'https://…/{z}/{x}/{y}.png',
           });
-          update((st) => { st.settings.tileUrl = v || ''; }, 'Kachelquelle geändert');
+          if (v === null && !st.tileUrl) return;
+          set((x) => { x.tileUrl = v || ''; }, 'Kartenquelle geändert');
           MapMod.setTileSource(v || '');
+          render();
           toast('Kartenquelle gesetzt', 'ok');
         },
-      }, 'Kachelquelle'),
-      'Notification' in window ? el('button', {
-        class: 'btn btn-small',
-        onclick: async () => {
+      })),
+    group('Fragen',
+      row({
+        icon: 'ring', title: 'Radius-Vorgaben', sub: meter(s.presets.radius),
+        onClick: () => editDistanceList('Radius-Vorgaben', s.presets.radius,
+          'Werte für die Schnellauswahl bei Radius-Fragen',
+          (list) => update((x) => { x.presets.radius = list; }, 'Radius-Vorgaben geändert')),
+      }),
+      row({
+        icon: 'measure', title: 'Ringe beim Messen', sub: meter(st.radiusRings),
+        onClick: () => editDistanceList('Ringe beim Messen', st.radiusRings,
+          'Ringe, die im Messmodus um deine Position liegen',
+          (list) => set((x) => { x.radiusRings = list; }, 'Radiusringe geändert')),
+      })),
+    group('Endgame',
+      row({
+        icon: 'footprints', title: 'Erfassungsbreite', sub: 'So nah muss die Spur an einer Straße sein, damit sie als abgelaufen gilt',
+        below: seg([[10, '10 m'], [20, '20 m'], [30, '30 m']], st.trackWidthM || 20, (v) => {
+          set((x) => { x.trackWidthM = v; });
+          Endgame.recompute();
+        }),
+      }),
+      row({
+        icon: 'route', title: 'Lücken schließen', sub: 'Wege bei aus­geschaltetem Bildschirm über das Straßennetz schätzen',
+        control: toggleSwitch(st.trackFillGaps !== false, (v) => set((x) => { x.trackFillGaps = v; })),
+      })),
+    group('Ortung und Akku',
+      row({
+        icon: 'gps', title: 'GPS', sub: (st.gpsAccuracy || 'high') === 'high' ? 'Jede Sekunde, auf wenige Meter' : 'Seltener und gröber – das Endgame ortet trotzdem genau',
+        below: seg([['high', 'Genau'], ['saving', 'Sparsam']], st.gpsAccuracy || 'high', (v) => {
+          set((x) => { x.gpsAccuracy = v; });
+          Loc.setAccuracyMode(v);
+          render();
+        }),
+      }),
+      row({
+        icon: 'battery', title: 'Stromsparmodus',
+        sub: powerSaving() ? 'Aktiv: gröbere Maske, keine Animationen' : 'Aus: volle Auflösung',
+        below: seg([['auto', 'Auto'], ['on', 'An'], ['off', 'Aus']], st.powerSave || 'auto', (v) => {
+          set((x) => { x.powerSave = v; });
+          render();
+        }),
+      }),
+      row({
+        icon: 'eye', title: 'Bildschirm anlassen', sub: 'Solange ein Timer läuft und im Endgame',
+        control: toggleSwitch(st.keepAwake !== false, (v) => set((x) => { x.keepAwake = v; })),
+      })),
+    group('Benachrichtigungen',
+      row({
+        icon: 'bell', title: 'Alarme als Mitteilung', value: notif,
+        onClick: 'Notification' in window ? async () => {
           const p = await Notification.requestPermission();
-          toast(p === 'granted' ? 'Benachrichtigungen an' : 'Abgelehnt', p === 'granted' ? 'ok' : 'error');
-        },
-      }, 'Benachrichtigungen') : null,
-    ),
-  ));
-
-  /* App */
-  host.append(el('div', { class: 'card' },
-    el('div', { class: 'card-title', text: 'App' }),
-    el('div', { class: 'card-sub', id: 'app-version', text: 'Version wird geladen …' }),
-    el('div', { class: 'row row-wrap' },
-      el('button', {
-        class: 'btn btn-small',
-        onclick: async () => {
+          toast(p === 'granted' ? 'Benachrichtigungen an' : 'Nicht erlaubt', p === 'granted' ? 'ok' : 'error');
+          render();
+        } : null,
+      })),
+    group('App',
+      row({ icon: 'info', title: 'Version', value: versionLine() }),
+      row({
+        icon: 'refresh', title: 'Nach Update suchen',
+        onClick: async () => {
           const reg = await navigator.serviceWorker?.getRegistration();
           if (!reg) return toast('Kein Service Worker aktiv', 'error');
           await reg.update();
           toast('Nach Update gesucht', 'ok');
         },
-      }, 'Update suchen'),
-      el('button', { class: 'btn btn-small', onclick: openInstallHelp }, 'Installieren'),
-      el('button', {
-        class: 'btn btn-small btn-danger',
-        onclick: async () => {
-          if (!(await confirmSheet('Alles zurücksetzen?', 'Fragen, Marker, Timer, Runden und Einstellungen werden gelöscht.', { danger: true, okLabel: 'Zurücksetzen' }))) return;
+      }),
+      row({ icon: 'install', title: 'Als App installieren', onClick: openInstallHelp }),
+      row({
+        icon: 'trash', title: 'Alles zurücksetzen', danger: true,
+        onClick: async () => {
+          if (!(await confirmSheet('Alles zurücksetzen?', 'Fragen, Marker, Timer, Runden, Endgame und Einstellungen werden gelöscht.', { danger: true, okLabel: 'Zurücksetzen' }))) return;
           replaceState(emptyState());
           MapMod.render();
           document.dispatchEvent(new CustomEvent('jetlag:changed'));
+          openPage('root');
           toast('Zurückgesetzt', 'ok');
         },
-      }, 'Zurücksetzen'),
-    ),
-  ));
-
-  updateVersionLine();
+      })),
+  );
 }
 
-function updateVersionLine() {
-  const node = document.getElementById('app-version');
-  if (!node) return;
+function versionLine() {
   const mode = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone
-    ? 'als App installiert' : 'im Browser';
-  node.textContent = `${window.__JL_VERSION__ || 'dev'} · ${mode}`;
-}
-
-function settingRow(label, control) {
-  return el('div', { class: 'row' }, el('span', { class: 'grow', text: label }), el('div', { style: { minWidth: '140px' } }, control));
+    ? 'installiert' : 'im Browser';
+  return `${window.__JL_VERSION__ || 'dev'} · ${mode}`;
 }
 
 function rangeInput(value, min, max, step, onChange) {
   const input = el('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(value) });
   input.addEventListener('input', () => onChange(parseFloat(input.value)));
+  input.addEventListener('click', (e) => e.stopPropagation());
   return input;
 }
 
-function toggle(value, onChange) {
-  return el('div', { class: 'seg' },
-    el('button', { class: value ? 'on' : '', onclick: (e) => { onChange(true); segOn(e); } }, 'An'),
-    el('button', { class: !value ? 'on' : '', onclick: (e) => { onChange(false); segOn(e); } }, 'Aus'));
+// Segmentierte Auswahl für Zeilen: [[wert, beschriftung], …]
+function seg(options, value, onChange) {
+  const wrap = el('div', { class: 'seg' });
+  for (const [v, label] of options) {
+    const b = el('button', {
+      class: v === value ? 'on' : '',
+      onclick: (e) => {
+        e.stopPropagation();
+        wrap.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        onChange(v);
+      },
+    }, label);
+    wrap.append(b);
+  }
+  return wrap;
 }
 
 function segOn(e) {
-  const seg = e.target.parentElement;
-  seg.querySelectorAll('button').forEach((b) => b.classList.remove('on'));
+  const seg2 = e.target.parentElement;
+  seg2.querySelectorAll('button').forEach((b) => b.classList.remove('on'));
   e.target.classList.add('on');
-}
-
-function setUnit(unit) {
-  update((st) => { st.settings.unit = unit; }, null);
-  document.dispatchEvent(new CustomEvent('jetlag:changed'));
 }
 
 function goMap() { document.querySelector('.tabbar [data-go="map"]').click(); }
 
 function areaLabel(area) {
-  if (!area) return 'Nicht gesetzt – ohne Gebiet gibt es keine Restflächen-Angabe.';
-  const unit = getState().settings.unit;
-  if (area.type === 'circle') return `Kreis, Radius ${formatDistance(area.radius, unit)}`;
+  if (!area) return 'Nicht gesetzt – ohne Gebiet keine Restflächen-Angabe';
+  if (area.type === 'circle') return `Kreis, Radius ${formatDistance(area.radius)}`;
   if (area.type === 'bbox') return 'Rechteck aus Kartenausschnitt';
   if (area.type === 'polygon') return `${area.name || 'Polygon'} · ${area.ring.length} Punkte`;
   return 'unbekannt';
@@ -259,21 +307,15 @@ export function openAreaSheet() {
       el('div', { class: 'card' },
         el('div', { class: 'card-title', text: 'Freie Form' }),
         el('div', { class: 'row row-wrap' },
-          el('button', {
-            class: 'btn btn-small',
-            onclick: async () => {
-              close();
-              const ring = await drawPolygon();
-              if (ring && ring.length >= 3) setArea({ type: 'polygon', ring, name: 'Gezeichnet' });
-            },
-          }, '✏️ Zeichnen'),
-          el('button', {
-            class: 'btn btn-small',
-            onclick: () => {
-              close();
-              areaPickerSheet(Loc.current(), (a) => setArea({ type: 'polygon', ring: a.ring, name: a.name }));
-            },
-          }, '🗺 Ort / Gebiet'))),
+          button('edit', 'Zeichnen', async () => {
+            close();
+            const ring = await drawPolygon();
+            if (ring && ring.length >= 3) setArea({ type: 'polygon', ring, name: 'Gezeichnet' });
+          }),
+          button('search', 'Ort oder Gebiet', () => {
+            close();
+            areaPickerSheet(Loc.current(), (a) => setArea({ type: 'polygon', ring: a.ring, name: a.name }));
+          }))),
     );
     return [el('button', { class: 'btn grow', onclick: () => close() }, 'Schließen')];
   });
@@ -316,7 +358,7 @@ function openAnalysis() {
       const pct = (r.insideFraction * 100).toFixed(0);
       body.append(el('div', { class: 'card' },
         el('div', { class: 'card-title' },
-          el('span', { class: 'grow', text: formatDistance(r.radius, s.settings.unit) }),
+          el('span', { class: 'grow', text: formatDistance(r.radius) }),
           el('span', { class: 'card-sub', text: `${pct} % / ${100 - pct} %` })),
         el('div', { class: 'progress' }, el('i', { style: { width: `${pct}%` } })),
         el('div', { class: 'card-sub', text: r.balance > 0.7 ? 'teilt gut' : r.balance > 0.3 ? 'brauchbar' : 'bringt wenig' })));
@@ -346,16 +388,16 @@ export function openInstallHelp() {
   });
 }
 
-// Abstandslisten (Radius-Vorgaben, Radiusringe) in der eingestellten Einheit bearbeiten.
+// Abstandslisten (Radius-Vorgaben, Radiusringe) bearbeiten – in Kilometern, durch
+// Semikolon getrennt, damit das Dezimalkomma bleiben darf ("0,25; 0,5; 1").
 async function editDistanceList(title, current, hint, save) {
-  const factor = getState().settings.unit === 'imperial' ? 1609.344 : 1000;
   const v = await promptSheet(title, {
-    label: `${hint} – in ${unitSuffix()}, durch Komma getrennt`,
-    value: current.map((m) => String(+(m / factor).toFixed(3)).replace('.', ',')).join(', '),
+    label: `${hint} – in km, durch Semikolon getrennt`,
+    value: current.map((m) => String(+(m / 1000).toFixed(3)).replace('.', ',')).join('; '),
   });
   if (v == null) return;
-  const list = v.split(',')
-    .map((x) => parseFloat(x.replace(',', '.')) * factor)
+  const list = v.split(/;|\s+/)
+    .map((x) => parseFloat(x.trim().replace(',', '.')) * 1000)
     .filter((x) => isFinite(x) && x > 0)
     .sort((a, b) => a - b);
   if (!list.length) { toast('Keine gültigen Werte', 'error'); return; }
@@ -366,71 +408,63 @@ async function editDistanceList(title, current, hint, save) {
 
 /* ---------- Regelwerk ---------- */
 
-function rulesCard() {
+function rulesPage(host) {
   const rules = Rules.getRules();
   if (!rules) {
-    return el('div', { class: 'card' },
-      el('div', { class: 'card-title', text: 'Regelwerk' }),
-      el('div', { class: 'card-sub', text: 'Wird geladen …' }));
+    host.append(el('div', { class: 'empty', text: 'Regelwerk wird geladen …' }));
+    return;
   }
   const size = Rules.currentSize();
-  const unit = getState().settings.unit;
+  const sizeSeg = seg(Rules.sizes().map((g) => [g.id, g.label]), size && size.id, (id) => {
+    Rules.setSize(id);
+    render();
+    MapMod.render();
+  });
 
-  return el('div', { class: 'card' },
-    el('div', { class: 'card-title' },
-      el('span', { class: 'grow', text: 'Regelwerk' }),
-      el('span', { class: 'card-sub', text: Rules.isCustom() ? 'eigenes' : 'Standard' })),
-    el('div', { class: 'card-sub', text: `${rules.name}${rules.version ? ` · ${rules.version}` : ''}` }),
-
-    el('label', { class: 'field' }, 'Spielgröße',
-      el('div', { class: 'seg' }, Rules.sizes().map((g) => el('button', {
-        class: g.id === (size && size.id) ? 'on' : '',
-        onclick: () => { Rules.setSize(g.id); render(); MapMod.render(); },
-      }, g.label)))),
-
-    size ? el('div', { class: 'card-sub' },
-      `${size.description} · ${size.typicalDuration || ''}`) : null,
-    size ? el('table', { class: 'scores' },
-      el('tr', {}, el('td', { text: 'Versteckzeit' }), el('td', { class: 'num mono', text: `${size.hidingPeriodMinutes} Min` })),
-      el('tr', {}, el('td', { text: 'Versteckzone' }), el('td', { class: 'num mono', text: zoneSummary(size.hidingZoneRadiusM) })),
-      el('tr', {}, el('td', { text: 'Antwortfrist' }), el('td', { class: 'num mono', text: `${size.answerMinutes} Min` })),
-      el('tr', {}, el('td', { text: 'Fotofrist' }), el('td', { class: 'num mono', text: `${size.photoMinutes || size.answerMinutes} Min` }))) : null,
-
-    el('div', { class: 'row row-wrap' },
-      el('button', { class: 'btn btn-small', onclick: openRulesOverview }, '📖 Regeln ansehen'),
-      el('button', {
-        class: 'btn btn-small',
-        onclick: () => {
+  host.append(
+    el('div', { class: 'card' },
+      el('div', { class: 'card-title' },
+        el('span', { class: 'grow', text: rules.name }),
+        el('span', { class: 'card-sub', text: Rules.isCustom() ? 'eigenes' : (rules.version || 'Standard') })),
+      el('label', { class: 'field' }, 'Spielgröße', sizeSeg),
+      size ? el('div', { class: 'card-sub', text: [size.description, size.typicalDuration].filter(Boolean).join(' · ') }) : null),
+    size ? group('Werte',
+      row({ icon: 'hourglass', title: 'Versteckzeit', value: `${size.hidingPeriodMinutes} min` }),
+      row({ icon: 'zone', title: 'Versteckzone', value: zoneSummary(size.hidingZoneRadiusM) }),
+      row({ icon: 'timer', title: 'Antwortfrist', value: `${size.answerMinutes} min` }),
+      row({ icon: 'clock', title: 'Fotofrist', value: `${size.photoMinutes || size.answerMinutes} min` })) : null,
+    group('Im Spiel',
+      row({ icon: 'book', title: 'Regeln ansehen', onClick: openRulesOverview }),
+      row({
+        icon: 'hourglass', title: 'Versteckzeit starten', sub: `${Rules.hidingPeriodMinutes()} min Countdown`,
+        onClick: () => {
           const m = Rules.hidingPeriodMinutes();
           createTimer({ name: 'Versteckzeit', kind: 'countdown', duration: m * 60000 });
           toast(`Versteckzeit läuft: ${m} Minuten`, 'ok');
           document.querySelector('.tabbar [data-go="timers"]').click();
         },
-      }, '⏱ Versteckzeit starten'),
-      el('button', { class: 'btn btn-small', onclick: seedDeckLists }, '🎴 Deck als Listen'),
-    ),
-    el('div', { class: 'row row-wrap' },
-      el('button', { class: 'btn btn-small', onclick: openRulesEditor }, '✏️ JSON bearbeiten'),
-      el('button', { class: 'btn btn-small', onclick: importRulesFile }, '📥 Datei laden'),
-      el('button', { class: 'btn btn-small', onclick: exportRules }, '💾 Export'),
-      Rules.isCustom() ? el('button', {
-        class: 'btn btn-small btn-danger',
-        onclick: async () => {
+      }),
+      row({ icon: 'cards', title: 'Deck als Listen anlegen', sub: 'Zum Ziehen nach Kartenhäufigkeit', onClick: seedDeckLists })),
+    group('Datei',
+      row({ icon: 'json', title: 'JSON bearbeiten', onClick: openRulesEditor }),
+      row({ icon: 'upload', title: 'Regeldatei laden', onClick: importRulesFile }),
+      row({ icon: 'download', title: 'Regeldatei exportieren', onClick: exportRules }),
+      Rules.isCustom() ? row({
+        icon: 'reset', title: 'Auf Standard zurücksetzen', danger: true,
+        onClick: async () => {
           if (!(await confirmSheet('Regelwerk zurücksetzen?', 'Zurück auf den mitgelieferten Standard von lifack.ch.', { danger: true, okLabel: 'Zurücksetzen' }))) return;
           await Rules.resetRules();
           render();
           toast('Standard wiederhergestellt', 'ok');
         },
-      }, 'Zurücksetzen') : null,
-    ),
-    el('div', { class: 'hint', text: rules.sourceNote || '' }),
+      }) : null),
+    rules.sourceNote ? el('div', { class: 'hint', text: rules.sourceNote }) : null,
   );
 }
 
 function openRulesOverview() {
   const rules = Rules.getRules();
   const size = Rules.currentSize();
-  const unit = getState().settings.unit;
   openSheet('Regeln', (body, close) => {
     body.append(el('div', { class: 'hint', text: `Gefiltert auf Spielgröße ${size ? size.label : '–'}.` }));
     for (const cat of Rules.categories()) {
@@ -441,7 +475,7 @@ function openRulesOverview() {
           el('span', { class: 'card-sub', text: `${Rules.drawLabel(cat)} · ${Rules.answerMinutes(cat.id)} Min` })),
         el('div', { class: 'card-sub', text: cat.prompt }),
         el('div', { class: 'hint', text: opts.length
-          ? opts.map((o) => o.meters ? `${o.label} (${formatDistance(o.meters, unit)})` : o.label).join(' · ')
+          ? opts.map((o) => o.meters ? `${o.label} (${formatDistance(o.meters)})` : o.label).join(' · ')
           : 'In dieser Spielgröße nicht verfügbar' })));
     }
     const r = rules.round || {};
@@ -469,7 +503,7 @@ function openRulesOverview() {
       body.append(el('div', { class: 'card' },
         el('div', { class: 'card-title', text: 'Grenzfälle' }),
         el('div', { class: 'card-sub', text: ties.map((q) => `${q.label}: ${Rules.TIE_LABEL[q.tieBreak]}`).join(' · ') }),
-        tol ? el('div', { class: 'hint', text: `Als Grenzfall gilt alles innerhalb von ${formatDistance(tol, unit)}.` }) : null));
+        tol ? el('div', { class: 'hint', text: `Als Grenzfall gilt alles innerhalb von ${formatDistance(tol)}.` }) : null));
     }
     for (const b of Rules.textBlocks()) {
       body.append(el('div', { class: 'card' },
@@ -582,49 +616,50 @@ function formatBytes(b) {
   return `${(b / 1048576).toFixed(1).replace('.', ',')} MB`;
 }
 
-async function offlineCard() {
+async function offlinePage(host) {
   const meta = bundleMeta();
-  const [kacheln, vorrat] = await Promise.all([cacheStats(), bundleStats()]);
   const s = getState();
+  const slot = el('div', { class: 'list' }, row({ icon: 'offline', title: 'Bestand wird gezählt …' }));
+  host.append(
+    el('div', { class: 'hint', text: 'Lädt Orte, Grenzen, Bezugsgeometrien und Kartenkacheln für das Spielgebiet einmal herunter. Danach läuft die Runde ohne Netz.' }),
+    slot,
+    group('Herunterladen',
+      row({
+        icon: 'offline', title: meta ? 'Neu vorbereiten' : 'Spielgebiet vorbereiten',
+        sub: s.area ? 'Alles, was das Regelwerk braucht' : 'Erst ein Spielgebiet festlegen',
+        onClick: s.area ? () => openPrepareSheet() : () => openAreaSheet(),
+      }),
+      row({ icon: 'map', title: 'Nur Kartenkacheln', onClick: () => openTilesSheet() })),
+  );
 
-  const zeilen = [];
+  const [kacheln, vorrat] = await Promise.all([cacheStats(), bundleStats()]);
+  clear(slot);
   if (meta) {
     const z = meta.zaehler || {};
-    zeilen.push(`${z.pois || 0} Orte · ${z.refs || 0} Geometrien · ${z.orte || 0} Gebiete`
-      + (z.gebiete ? ` · ${z.gebiete} Verwaltungsumrisse` : '') + (z.hoehe ? ` · ${z.hoehe} Höhenpunkte` : ''));
-    zeilen.push(`${kacheln.count} Kartenkacheln · ${formatBytes(vorrat.bytes)} Daten`);
-    zeilen.push(`vorbereitet am ${new Date(meta.at).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}`);
-    if (meta.fehler?.length) zeilen.push(`${meta.fehler.length} Abfragen fehlgeschlagen`);
+    slot.append(
+      row({ title: 'Orte', value: String(z.pois || 0) }),
+      row({ title: 'Geometrien', value: String(z.refs || 0) }),
+      row({ title: 'Gebiete', value: `${z.orte || 0}${z.gebiete ? ` · ${z.gebiete} Umrisse` : ''}` }),
+      z.hoehe ? row({ title: 'Höhenpunkte', value: String(z.hoehe) }) : null,
+      row({ title: 'Kartenkacheln', value: String(kacheln.count) }),
+      row({ title: 'Speicher', value: formatBytes(vorrat.bytes) }),
+      row({ title: 'Vorbereitet', value: new Date(meta.at).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) }),
+      meta.fehler?.length ? row({ title: 'Fehlgeschlagen', value: `${meta.fehler.length} Abfragen` }) : null,
+    );
   } else {
-    zeilen.push('Nichts vorbereitet – unterwegs braucht jede Frage dann Empfang.');
-    if (kacheln.count) zeilen.push(`${kacheln.count} Kartenkacheln liegen bereits vor.`);
+    slot.append(row({ title: 'Nichts vorbereitet', sub: kacheln.count ? `${kacheln.count} Kartenkacheln liegen bereits vor` : 'Unterwegs braucht jede Frage dann Empfang' }));
   }
-
-  return el('div', { class: 'card' },
-    el('div', { class: 'card-title' },
-      el('span', { class: 'grow', text: 'Offline-Vorrat' }),
-      meta ? el('span', { class: 'card-sub', text: 'bereit' }) : null),
-    ...zeilen.map((t) => el('div', { class: 'card-sub', text: t })),
-    el('div', { class: 'hint', text: 'Lädt Orte, Grenzen, Bezugsgeometrien und Kartenkacheln für dein Spielgebiet einmal herunter. Danach läuft die Runde ohne Netz.' }),
-    el('div', { class: 'row row-wrap' },
-      el('button', {
-        class: 'btn btn-small btn-primary',
-        onclick: () => openPrepareSheet(),
-        disabled: !s.area,
-      }, meta ? 'Neu vorbereiten' : 'Gebiet vorbereiten'),
-      el('button', { class: 'btn btn-small', onclick: () => openTilesSheet() }, 'Nur Kacheln'),
-      (meta || kacheln.count) ? el('button', {
-        class: 'btn btn-small btn-danger',
-        onclick: async () => {
-          if (!(await confirmSheet('Offline-Vorrat löschen?', 'Karten und vorgeladene Daten werden entfernt.', { danger: true, okLabel: 'Löschen' }))) return;
-          await Promise.all([clearBundle(), clearTileCache()]);
-          render();
-          toast('Vorrat geleert', 'ok');
-        },
-      }, 'Löschen') : null,
-    ),
-    !s.area ? el('div', { class: 'hint', text: 'Erst ein Spielgebiet festlegen.' }) : null,
-  );
+  if (meta || kacheln.count) {
+    host.append(group(null, row({
+      icon: 'trash', title: 'Vorrat löschen', danger: true,
+      onClick: async () => {
+        if (!(await confirmSheet('Offline-Vorrat löschen?', 'Karten und vorgeladene Daten werden entfernt.', { danger: true, okLabel: 'Löschen' }))) return;
+        await Promise.all([clearBundle(), clearTileCache()]);
+        render();
+        toast('Vorrat geleert', 'ok');
+      },
+    })));
+  }
 }
 
 function openPrepareSheet() {

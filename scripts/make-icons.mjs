@@ -54,10 +54,10 @@ function encodePng(width, height, rgba) {
 
 /* ---------- Motiv ---------- */
 // Radarringe mit hellem Mittelpunkt und einer Trennlinie – genau das, was die App tut.
-const BG = [15, 23, 48];
-const ACCENT = [56, 189, 248];
-const HOT = [249, 115, 22];
-const DOT = [232, 240, 254];
+const BG = [18, 19, 22];
+const ACCENT = [77, 141, 245];
+const HOT = [252, 90, 28];
+const DOT = [237, 237, 239];
 
 function scene(u, v, scale) {
   // u,v in [0,1]; scale schrumpft den Inhalt für maskierbare Icons

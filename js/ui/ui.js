@@ -1,5 +1,9 @@
 // Kleine DOM-Helfer: Elemente bauen, Sheets öffnen, Toasts zeigen.
 
+import { icon } from './icons.js';
+
+export { icon };
+
 export function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -58,7 +62,7 @@ export function openSheet(title, build, opts = {}) {
   const sheet = el('div', { class: 'sheet' },
     el('div', { class: 'sheet-head' },
       el('h2', { text: title }),
-      el('button', { class: 'btn btn-small btn-ghost', onclick: () => close(), 'aria-label': 'Schließen' }, '✕'),
+      el('button', { class: 'icon-btn', onclick: () => close(), 'aria-label': 'Schließen' }, icon('x')),
     ),
     body, foot,
   );
@@ -147,4 +151,51 @@ export function formatClock(ms, { withHours = null } = {}) {
 
 export function formatTime(ts) {
   return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+}
+
+/* ---------- Listen und Schalter ---------- */
+
+// Gruppierte Liste wie in den Systemeinstellungen: Überschrift, darunter Zeilen.
+export function group(title, ...rows) {
+  return el('section', { class: 'group' },
+    title ? el('div', { class: 'group-title', text: title }) : null,
+    el('div', { class: 'list' }, ...rows));
+}
+
+// Eine Zeile: Symbol, Titel, optional Untertitel, rechts Wert/Bedienelement oder Pfeil.
+// Mit onClick wird die ganze Zeile zum Knopf.
+// below: Bedienelement unter dem Text über die volle Breite (Auswahl mit mehreren Stufen)
+export function row({ icon: ic, title, sub, value, control, below, onClick, danger = false, chevron = !!onClick && !control }) {
+  const node = el(onClick ? 'button' : 'div', { class: `row-item ${danger ? 'danger' : ''} ${below ? 'stacked' : ''}`, onclick: onClick || null },
+    ic ? icon(ic, 'row-icon') : null,
+    el('div', { class: 'row-text' },
+      el('div', { class: 'row-title', text: title }),
+      sub ? el('div', { class: 'row-sub', text: sub }) : null,
+      below ? el('div', { class: 'row-below' }, below) : null),
+    value != null ? el('div', { class: 'row-value', text: value }) : null,
+    control || null,
+    chevron ? icon('chevronRight', 'row-chevron') : null);
+  return node;
+}
+
+// Kippschalter statt "An/Aus"-Segmenten – eine Entscheidung, ein Element.
+export function toggleSwitch(value, onChange, label = '') {
+  const b = el('button', { class: `switch ${value ? 'on' : ''}`, role: 'switch', 'aria-checked': String(!!value), 'aria-label': label });
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    value = !value;
+    b.classList.toggle('on', value);
+    b.setAttribute('aria-checked', String(value));
+    onChange(value);
+  });
+  return b;
+}
+
+// Knopf mit Symbol und Text
+export function button(ic, text, onClick, cls = 'btn btn-small') {
+  return el('button', { class: cls, onclick: onClick }, ic ? icon(ic) : null, text ? el('span', { text }) : null);
+}
+
+export function iconButton(ic, onClick, label, cls = '') {
+  return el('button', { class: `icon-btn ${cls}`.trim(), onclick: onClick, 'aria-label': label, title: label }, icon(ic));
 }

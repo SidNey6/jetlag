@@ -384,3 +384,60 @@ test('Raster bildet die Auswertung ab und wird gecacht', () => {
   const sh = C.shapes(c, { bounds, cols: 40 });
   assert.equal(sh[0].kind, 'raster');
 });
+
+/* ---------- Flussseite ---------- */
+
+// Ein Fluss, der nach Norden fließt, dann einen Bogen nach Osten und zurück nach Süden macht
+const BONN = { lat: 50.7374, lng: 7.0982 };
+const off = (dx, dy) => ({ lat: BONN.lat + dy / 111320, lng: BONN.lng + dx / (111320 * Math.cos(BONN.lat * Math.PI / 180)) });
+
+test('Flussseite: links und rechts in Fließrichtung', () => {
+  const fluss = [{ type: 'line', points: [off(0, -2000), off(0, 2000)] }];
+  assert.equal(geo.sideOfLines(off(-300, 0), fluss).side, 1, 'westlich eines Nordwärts-Flusses ist links');
+  assert.equal(geo.sideOfLines(off(300, 0), fluss).side, -1, 'östlich ist rechts');
+  assert.ok(Math.abs(geo.sideOfLines(off(300, 0), fluss).distance - 300) < 1);
+  // Hinter dem Ende gilt die Verlängerung
+  assert.equal(geo.sideOfLines(off(200, 3000), fluss).side, -1);
+});
+
+test('Flussseite: außen an einer Kurve und über zwei Teilstücke hinweg richtig', () => {
+  // Nach Osten, dann Knick nach Norden – zwei getrennte Wege wie in OSM
+  const fluss = [
+    { type: 'line', points: [off(-2000, 0), off(0, 0)] },
+    { type: 'line', points: [off(0, 0), off(0, 2000)] },
+  ];
+  // Südöstlich des Knicks: rechts von beiden Stücken
+  assert.equal(geo.sideOfLines(off(100, -100), fluss).side, -1);
+  // Nordwestlich, innen in der Kurve: links
+  assert.equal(geo.sideOfLines(off(-100, 100), fluss).side, 1);
+});
+
+test('Flussseite: Mäander ändern die Seite nicht', () => {
+  // Fluss nach Osten, Schleife nach Norden und zurück nach Westen, dann weiter nach Norden
+  const fluss = [{ type: 'line', points: [off(-3000, 0), off(1000, 0), off(1000, 600), off(-1000, 600), off(-1000, 1200), off(3000, 1200)] }];
+  const sued = geo.sideOfLines(off(0, -500), fluss).side;           // unterhalb des ersten Laufs
+  const nord = geo.sideOfLines(off(0, 1800), fluss).side;           // oberhalb des letzten Laufs
+  const zwischen1 = geo.sideOfLines(off(0, 300), fluss).side;        // zwischen Lauf 1 und 2
+  const zwischen2 = geo.sideOfLines(off(0, 900), fluss).side;        // zwischen Lauf 2 und 3
+  assert.equal(sued, -1);
+  assert.equal(nord, 1);
+  // Zwischen den Läufen wechselt die Seite, wie es die Topologie verlangt
+  assert.equal(zwischen1, 1);
+  assert.equal(zwischen2, -1);
+});
+
+test('Flussseite als Frage: gleiche Seite schließt das andere Ufer aus', () => {
+  const features = [{ type: 'line', points: [off(0, -5000), off(0, 5000)] }];
+  const ich = off(-400, 0);
+  const mySide = geo.sideOfLines(ich, features).side;
+  const gleich = { type: 'side', features, myPoint: ich, mySide, same: true };
+  const anders = { ...gleich, same: false };
+  assert.ok(C.allows(gleich, off(-1200, 800)));
+  assert.ok(!C.allows(gleich, off(900, -300)));
+  assert.ok(C.allows(anders, off(900, -300)));
+  assert.ok(!C.allows(anders, off(-50, 0)));
+  // Grenzfall-Regel "ja": direkt am Fluss zählt als gleiche Seite
+  const mitToleranz = { ...anders, tieBreak: 'yes', tieToleranceM: 20 };
+  assert.ok(!C.allows(mitToleranz, off(10, 0)));
+  assert.ok(C.needsRaster(gleich));
+});

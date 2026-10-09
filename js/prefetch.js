@@ -6,7 +6,7 @@
 // Dafür läuft danach die ganze Runde ohne eine einzige weitere Abfrage.
 
 import { areaBounds } from './constraints.js';
-import { poisInBox, areasInBox, findNearestFeatures, adminAreasInBox, bundleKey } from './overpass.js';
+import { poisInBox, areasInBox, findNearestFeatures, adminAreasInBox, bundleKey, STOP_CATEGORIES } from './overpass.js';
 import { POI_CATEGORIES, REFERENCES, poiCategory, reference } from './sources.js';
 import { fetchElevationGrid } from './elevation.js';
 import { bundlePut, setBundleMeta, areaCenter, areaRadius } from './bundle.js';
@@ -59,7 +59,7 @@ export function neededSources() {
         if (typ === 'elevation') elevation = true;
         if (typ === 'area' && o.adminLevel) adminLevels.add(o.adminLevel);
         for (const id of ids) {
-          if (typ === 'compare') addRef(id, params);
+          if (typ === 'compare' || typ === 'side') addRef(id, params);
           else if (typ === 'nearest') {
             if (poiCategory(id) && o.match !== 'shape') pois.add(id); else addRef(id, params);
           } else if (poiCategory(id)) pois.add(id);
@@ -72,6 +72,9 @@ export function neededSources() {
   // Ohne Regelwerk das Nötigste für die freien Werkzeuge
   if (!pois.size) ['station', 'museum', 'park', 'hospital', 'library'].forEach((x) => pois.add(x));
   if (!refs.size) ['motorway', 'river', 'station', 'park'].forEach((x) => addRef(x));
+  // Haltestellen immer: das Endgame startet mit langem Drücken auf eine davon, und
+  // das soll auch im Funkloch gehen
+  STOP_CATEGORIES.forEach((x) => pois.add(x));
 
   return {
     pois: [...pois].filter((id) => POI_CATEGORIES.some((c) => c.id === id)),

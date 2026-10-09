@@ -4,16 +4,18 @@
 // Statistik und Zufallspunkte laufen über allows(), nicht über die Pixel der Maske —
 // dadurch sind sie unabhängig von Zoom und Bildausschnitt.
 
-import { distance, bearing, circle, sector, bisector, pointInPolygon, formatDistance, distanceToFeatures, distanceToRing, sampleGrid } from './geo.js';
+import { distance, bearing, circle, sector, bisector, pointInPolygon, formatDistance, distanceToFeatures, distanceToRing, sampleGrid, sideOfLines } from './geo.js';
 
+// icon: Name aus ui/icons.js
 export const TYPES = {
-  radius:  { label: 'Radius',        icon: '◎', color: '#38bdf8' },
-  thermo:  { label: 'Thermometer',   icon: '🌡', color: '#f97316' },
-  compare: { label: 'Vergleich',     icon: '⇄', color: '#a78bfa' },
-  area:    { label: 'Gebiet',        icon: '▱', color: '#34d399' },
-  nearest: { label: 'Nächster Ort',  icon: '⌖', color: '#fbbf24' },
-  sector:  { label: 'Richtung',      icon: '∡', color: '#f472b6' },
-  elevation: { label: 'Höhe',        icon: '⛰', color: '#22d3ee' },
+  radius:    { label: 'Radius',       icon: 'radius',    color: '#5b9cf5' },
+  thermo:    { label: 'Thermometer',  icon: 'thermo',    color: '#f08a4b' },
+  compare:   { label: 'Vergleich',    icon: 'compare',   color: '#a48bf0' },
+  area:      { label: 'Gebiet',       icon: 'area',      color: '#4fbf8f' },
+  nearest:   { label: 'Nächster Ort', icon: 'nearest',   color: '#e3b341' },
+  side:      { label: 'Flussseite',   icon: 'side',      color: '#3fb6d3' },
+  sector:    { label: 'Richtung',     icon: 'sector',    color: '#e07aa8' },
+  elevation: { label: 'Höhe',         icon: 'elevation', color: '#8fb3c9' },
 };
 
 // Antworten der Seite "A" – drin, wärmer, näher, ja. Die Gegenseite ist jeweils B.
@@ -59,6 +61,13 @@ export function allows(c, p) {
     }
     case 'nearest':
       return nearestAllows(c, p);
+    case 'side': {
+      const r = sideOfLines(p, c.features);
+      if (!r || !r.side || !c.mySide) return true;
+      // Abstand zum Fluss mit Vorzeichen: positiv auf der eigenen Seite
+      const s = (r.side === c.mySide ? 1 : -1) * r.distance;
+      return sideA(c, s, true) === !!c.same;
+    }
     case 'elevation': {
       const h = sampleGrid(c.grid, p);
       if (h == null) return true; // keine Höhe bekannt: nicht ausschließen
@@ -123,7 +132,7 @@ function nearestAllows(c, p) {
 const rasterCache = new WeakMap();
 
 export function needsRaster(c) {
-  return c.type === 'elevation' || (c.type === 'nearest' && !!c.candidates);
+  return c.type === 'elevation' || c.type === 'side' || (c.type === 'nearest' && !!c.candidates);
 }
 
 export function rasterFor(c, bounds, cols = 100) {
@@ -246,6 +255,11 @@ export function outline(c) {
       return c.pois.map((p) => ({ kind: 'dot', at: p, strong: p.id === c.chosenId, label: p.name }));
     case 'elevation':
       return c.myPoint ? [{ kind: 'dot', at: c.myPoint, strong: true }] : [];
+    case 'side':
+      return [
+        ...(c.features || []).map((f) => ({ kind: 'path', points: f.points, strong: true })),
+        ...(c.myPoint ? [{ kind: 'dot', at: c.myPoint }] : []),
+      ];
     case 'sector':
       return [{ kind: 'dot', at: c.center }];
     default:
@@ -253,8 +267,8 @@ export function outline(c) {
   }
 }
 
-export function describe(c, unit = 'metric') {
-  const d = (m) => formatDistance(m, unit);
+export function describe(c) {
+  const d = formatDistance;
   switch (c.type) {
     case 'radius':
       return `${c.inside ? 'Innerhalb' : 'Außerhalb'} ${d(c.radius)} um ${c.centerName || 'Punkt'}`;
@@ -274,6 +288,8 @@ export function describe(c, unit = 'metric') {
     }
     case 'elevation':
       return `${c.closer ? 'Näher am' : 'Weiter vom'} Meeresspiegel als ${Math.round(c.myElevation)} m`;
+    case 'side':
+      return `${c.same ? 'Gleiche' : 'Andere'} Seite: ${c.name || 'Fluss'}`;
     case 'sector':
       return `${c.inside ? 'Richtung' : 'Nicht Richtung'} ${Math.round(c.from)}°–${Math.round(c.to)}°`;
     default:

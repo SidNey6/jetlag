@@ -6,29 +6,25 @@ import * as C from './constraints.js';
 import * as Loc from './location.js';
 import * as MapMod from './map.js';
 import { distance, formatDistance, bearing } from './geo.js';
-import { el, clear, append, openSheet, confirmSheet, toast, segmented, formatTime } from './ui/ui.js';
+import { el, clear, append, openSheet, confirmSheet, toast, segmented, formatTime, icon, button, iconButton } from './ui/ui.js';
 import { poiSheet, areaPickerSheet, findPois, findNearestFeatures, findCandidates, adminAreaAt, REFERENCES, POI_CATEGORIES } from './overpass.js';
-import { poiCategory, reference } from './sources.js';
+import { poiCategory, reference, SIDE_REFERENCES } from './sources.js';
 import { elevationGridFor, fetchElevationAt } from './elevation.js';
-import { sampleGrid } from './geo.js';
+import { sampleGrid, sideOfLines } from './geo.js';
 import * as Rules from './rules.js';
 import { createTimer } from './timers.js';
 import { logNote } from './rounds.js';
-
-const UNIT_STEPS = { metric: 1000, imperial: 1609.344 };
 
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-export function unitSuffix() {
-  return getState().settings.unit === 'imperial' ? 'mi' : 'km';
-}
-function toMeters(value) {
-  return value * UNIT_STEPS[getState().settings.unit];
+// Eingaben laufen in Kilometern, gerechnet wird in Metern.
+function toMeters(km) {
+  return km * 1000;
 }
 function fromMeters(m) {
-  return m / UNIT_STEPS[getState().settings.unit];
+  return m / 1000;
 }
 
 /* ---------- Punktauswahl ---------- */
@@ -49,28 +45,19 @@ export function pointField(label, initial, onChange, { allowMe = true } = {}) {
   paint();
 
   const row = el('div', { class: 'row row-wrap' },
-    allowMe ? el('button', {
-      class: 'btn btn-small',
-      onclick: () => {
-        const me = Loc.current();
-        if (!me) return toast('Noch keine Position', 'error');
-        set(me, 'meine Position');
-      },
-    }, '⌖ Meine Position') : null,
-    el('button', {
-      class: 'btn btn-small',
-      onclick: async (e) => {
-        const sheet = e.target.closest('.sheet-backdrop');
-        if (sheet) sheet.style.display = 'none';
-        const p = await MapMod.pickPoint('Punkt für „' + label + '" antippen');
-        if (sheet) sheet.style.display = '';
-        if (p) set(p, null);
-      },
-    }, '👆 Auf Karte'),
-    el('button', {
-      class: 'btn btn-small',
-      onclick: () => openSavedPointPicker((p, name) => set(p, name)),
-    }, '📍 Gespeichert'),
+    allowMe ? button('crosshair', 'Meine Position', () => {
+      const me = Loc.current();
+      if (!me) return toast('Noch keine Position', 'error');
+      set(me, 'meine Position');
+    }) : null,
+    button('pointer', 'Auf Karte', async (e) => {
+      const sheet = e.currentTarget.closest('.sheet-backdrop');
+      if (sheet) sheet.style.display = 'none';
+      const p = await MapMod.pickPoint('Punkt für „' + label + '" antippen');
+      if (sheet) sheet.style.display = '';
+      if (p) set(p, null);
+    }),
+    button('pin', 'Gespeichert', () => openSavedPointPicker((p, name) => set(p, name))),
   );
 
   return { node: el('label', { class: 'field' }, label, row, readout), get value() { return value; }, set };
@@ -90,11 +77,11 @@ function openSavedPointPicker(pick) {
     const me = Loc.current();
     for (const it of items) {
       append(body, el('button', {
-        class: 'card', style: { textAlign: 'left' },
+        class: 'card',
         onclick: () => { close(); pick(it, it.name); },
       },
         el('div', { class: 'card-title' }, it.name || 'Ohne Namen'),
-        el('div', { class: 'card-sub', text: `${it.kind}${me ? ' · ' + formatDistance(distance(me, it), getState().settings.unit) : ''}` }),
+        el('div', { class: 'card-sub', text: `${it.kind}${me ? ' · ' + formatDistance(distance(me, it)) : ''}` }),
       ));
     }
     return [];
@@ -109,6 +96,7 @@ const FREE_TOOLS = [
   ['compare', 'Vergleich', 'Bist du näher oder weiter an einem Ort als ich?'],
   ['nearest', 'Nächster Ort', 'Welchem Ort aus einer Liste bist du am nächsten?'],
   ['area', 'Gebiet', 'Bist du in diesem Gebiet (Dorf, Bezirk, Fläche)?'],
+  ['side', 'Flussseite', 'Bist du auf derselben Seite des Flusses wie ich?'],
   ['sector', 'Richtung', 'Liegst du in diesem Himmelsrichtungs-Sektor?'],
   ['elevation', 'Höhe', 'Bist du näher am Meeresspiegel als ich?'],
 ];
@@ -125,7 +113,7 @@ export function openQuestionPicker() {
         const n = Rules.optionsFor(cat.id).length;
         const minutes = Rules.answerMinutes(cat.id);
         append(body, el('button', {
-          class: 'card', style: { textAlign: 'left' },
+          class: 'card',
           disabled: n === 0,
           onclick: () => { close(); openRuleOptions(cat); },
         },
@@ -134,17 +122,18 @@ export function openQuestionPicker() {
             el('span', { class: 'card-sub', text: [Rules.drawLabel(cat), minutes ? `${minutes} Min` : null].filter(Boolean).join(' · ') })),
           el('div', { class: 'card-sub', text: n ? cat.prompt : 'In dieser Spielgröße nicht verfügbar' })));
       }
-      append(body, el('div', { class: 'hint', style: { marginTop: '10px', fontWeight: '600' }, text: 'Freie Werkzeuge' }));
+      append(body, el('div', { class: 'group-title', text: 'Freie Werkzeuge' }));
     }
 
     for (const [type, title, sub] of FREE_TOOLS) {
       const t = C.TYPES[type];
+      const ic = icon(t.icon);
+      ic.style.color = t.color;
       append(body, el('button', {
-        class: 'card', style: { textAlign: 'left' },
+        class: 'card',
         onclick: () => { close(); openQuestionForm(type); },
       },
-        el('div', { class: 'card-title' },
-          el('span', { class: 'dot', style: { background: t.color } }), `${t.icon}  ${title}`),
+        el('div', { class: 'card-title' }, ic, title),
         el('div', { class: 'card-sub', text: sub })));
     }
     return [];
@@ -154,28 +143,28 @@ export function openQuestionPicker() {
 // Werte einer Regelkategorie, gefiltert auf die eingestellte Spielgröße.
 export function openRuleOptions(cat) {
   const options = Rules.optionsFor(cat.id);
-  const unit = getState().settings.unit;
   openSheet(cat.label, (body, close) => {
     append(body, el('div', { class: 'hint', text: cat.prompt }));
     let group = null;
     for (const o of options) {
       if (o.group && o.group !== group) {
         group = o.group;
-        append(body, el('div', { class: 'hint', style: { marginTop: '8px', fontWeight: '600' }, text: group }));
+        append(body, el('div', { class: 'group-title', text: group }));
       }
       const typ = 'appType' in o ? o.appType : cat.appType;
       const quellen = Rules.optionSources(o);
       const extra = [
-        o.meters ? formatDistance(o.meters, unit) : null,
+        o.meters ? formatDistance(o.meters) : null,
         o.radiusLabel && !o.meters ? o.radiusLabel : null,
         o.freeChoice ? 'Objekt frei wählbar' : null,
         typ === 'elevation' ? 'Geländehöhe' : null,
         o.adminLevel ? `Verwaltungsebene ${o.adminLevel}` : null,
+        typ === 'side' ? 'Seite des Gewässers' : null,
         quellen.length > 1 ? `${quellen.length} Quellen` : (quellen.length ? 'aus OpenStreetMap' : null),
         typ === null ? 'nur Protokoll' : null,
       ].filter(Boolean).join(' · ');
       append(body, el('button', {
-        class: 'card', style: { textAlign: 'left' },
+        class: 'card',
         onclick: () => { close(); startRuleQuestion(cat, o); },
       },
         el('div', { class: 'card-title', text: o.label }),
@@ -271,12 +260,15 @@ function openFreeChoice(cat, option) {
 
 function tieHint(prefill) {
   if (!prefill || !prefill.tieBreak) return null;
-  const tol = prefill.tieToleranceM ? ` (innerhalb ${formatDistance(prefill.tieToleranceM, getState().settings.unit)})` : '';
+  const tol = prefill.tieToleranceM ? ` (innerhalb ${formatDistance(prefill.tieToleranceM)})` : '';
   return el('div', { class: 'hint', text: `Grenzfall-Regel: genau auf der Grenze gilt „${Rules.TIE_LABEL[prefill.tieBreak] || prefill.tieBreak}"${tol}.` });
 }
 
 export function openQuestionForm(type, existing = null, prefill = null) {
-  const builders = { radius: radiusForm, thermo: thermoForm, compare: compareForm, area: areaForm, nearest: nearestForm, sector: sectorForm, elevation: elevationForm };
+  const builders = {
+    radius: radiusForm, thermo: thermoForm, compare: compareForm, area: areaForm,
+    nearest: nearestForm, sector: sectorForm, elevation: elevationForm, side: sideForm,
+  };
   const build = builders[type];
   if (!build) return;
   openSheet(existing ? 'Frage bearbeiten' : C.TYPES[type].label, (body, close) => {
@@ -313,7 +305,7 @@ function commit(c, existing) {
     const entry = { id: uid('q'), active: true, at: Date.now(), ...c };
     update((s) => {
       s.constraints.push(entry);
-      s.game.log.push({ id: uid('lg'), at: entry.at, kind: 'question', text: C.describe(entry, s.settings.unit) });
+      s.game.log.push({ id: uid('lg'), at: entry.at, kind: 'question', text: C.describe(entry) });
     }, 'Frage hinzugefügt');
   }
   MapMod.render();
@@ -329,7 +321,7 @@ function answerSeg(labels, initial, onChange) {
 }
 
 // Anzeige auf drei Nachkommastellen kürzen; gerechnet wird weiter mit dem exakten
-// Meterwert, sonst stünde bei ½ Meile "0,804672" im Feld.
+// Meterwert.
 function inputValue(meters) {
   return String(+fromMeters(meters).toFixed(3));
 }
@@ -350,10 +342,10 @@ export function distanceField(label, initialMeters, onChange, presets = []) {
       pills.querySelectorAll('.pill').forEach((p) => p.classList.remove('on'));
       e.target.classList.add('on');
     },
-  }, formatDistance(m, getState().settings.unit))));
+  }, formatDistance(m))));
   input.addEventListener('input', () => pills.querySelectorAll('.pill').forEach((p) => p.classList.remove('on')));
   return {
-    node: el('label', { class: 'field' }, `${label} (${unitSuffix()})`, input, presets.length ? pills : null),
+    node: el('label', { class: 'field' }, `${label} (km)`, input, presets.length ? pills : null),
     get meters() { return meters; },
   };
 }
@@ -392,24 +384,21 @@ function thermoForm(body, existing, prefill) {
   const info = el('div', { class: 'hint' });
   const refresh = () => {
     info.textContent = from && to
-      ? `Zurückgelegt: ${formatDistance(distance(from, to), s.settings.unit)} Richtung ${Math.round(bearing(from, to))}°`
+      ? `Zurückgelegt: ${formatDistance(distance(from, to))} Richtung ${Math.round(bearing(from, to))}°`
       : 'Beide Punkte wählen';
   };
   const ff = pointField('Startpunkt (vor der Fahrt)', from, (p) => { from = p; refresh(); });
   const tf = pointField('Endpunkt (jetzt)', to, (p) => { to = p; refresh(); });
   refresh();
 
-  append(body, 
-    el('button', {
-      class: 'btn btn-small',
-      onclick: () => {
-        const me = Loc.current();
-        if (!me) return toast('Noch keine Position', 'error');
-        update((st) => { st.ui.thermoStart = { lat: me.lat, lng: me.lng }; });
-        ff.set(me, 'Startmarke');
-        toast('Startpunkt gemerkt', 'ok');
-      },
-    }, '⚑ Hier ist der Startpunkt'),
+  append(body,
+    button('game', 'Hier ist der Startpunkt', () => {
+      const me = Loc.current();
+      if (!me) return toast('Noch keine Position', 'error');
+      update((st) => { st.ui.thermoStart = { lat: me.lat, lng: me.lng }; });
+      ff.set(me, 'Startmarke');
+      toast('Startpunkt gemerkt', 'ok');
+    }),
     ff.node, tf.node, info,
     el('label', { class: 'field' }, 'Antwort',
       answerSeg(['Wärmer', 'Kälter'], warmer, (v) => { warmer = v; })),
@@ -455,7 +444,7 @@ function compareForm(body, existing, prefill) {
   function refresh() {
     const d = currentDistance();
     info.textContent = d != null
-      ? `Dein Abstand: ${formatDistance(d, s.settings.unit)}`
+      ? `Dein Abstand: ${formatDistance(d)}`
       : 'Bezugsobjekt wählen – die App misst den Abstand selbst.';
   }
 
@@ -480,7 +469,7 @@ function compareForm(body, existing, prefill) {
       refName = res.name ? `${label} (${res.name})` : label;
       const arten = [...new Set(res.features.map((f) => f.type))]
         .map((t) => ({ line: 'Linie', polygon: 'Fläche', point: 'Punkt' }[t] || t)).join('/');
-      status.textContent = `${refName} · ${formatDistance(res.distance, getState().settings.unit)} · als ${arten} gemessen`;
+      status.textContent = `${refName} · ${formatDistance(res.distance)} · als ${arten} gemessen`;
       refresh();
     } catch (e) {
       features = null;
@@ -516,7 +505,7 @@ function compareForm(body, existing, prefill) {
         status.textContent = p ? `Eigener Punkt · ${refName}` : '';
         refresh();
       }, { allowMe: false }).node),
-    el('label', { class: 'field' }, `Abstand selbst eintragen (${unitSuffix()})`, manualInput),
+    el('label', { class: 'field' }, 'Abstand selbst eintragen (km)', manualInput),
     info,
     el('label', { class: 'field' }, 'Antwort',
       answerSeg(['Näher als ich', 'Weiter als ich'], closer, (v) => { closer = v; })),
@@ -572,24 +561,19 @@ function areaForm(body, existing, prefill) {
 
   append(body,
     prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
-    el('button', {
-      class: 'btn btn-small',
-      onclick: () => areaPickerSheet(Loc.current(), (area) => {
+    el('div', { class: 'row row-wrap' },
+      button('search', 'Ort oder Gebiet laden', () => areaPickerSheet(Loc.current(), (area) => {
         ring = area.ring; name = area.name;
         nameInput.value = name;
         info.textContent = `${ring.length} Stützpunkte · ${area.level || ''}`;
-      }),
-    }, '🗺 Ort oder Gebiet laden (OSM)'),
-    el('button', {
-      class: 'btn btn-small',
-      onclick: async (e) => {
-        const sheet = e.target.closest('.sheet-backdrop');
+      })),
+      button('edit', 'Auf Karte zeichnen', async (e) => {
+        const sheet = e.currentTarget.closest('.sheet-backdrop');
         sheet.style.display = 'none';
         const pts = await drawPolygon();
         sheet.style.display = '';
         if (pts && pts.length >= 3) { ring = pts; info.textContent = `${ring.length} Stützpunkte (gezeichnet)`; }
-      },
-    }, '✏️ Gebiet auf Karte zeichnen'),
+      })),
     el('label', { class: 'field' }, 'Name', nameInput),
     info,
     el('label', { class: 'field' }, 'Antwort',
@@ -678,17 +662,14 @@ function nearestForm(body, existing, prefill) {
   paint();
   append(body,
     prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
-    el('button', {
-      class: 'btn btn-small',
-      onclick: () => poiSheet(Loc.current(), (found) => {
-        pois = found;
-        candidates = null;
-        chosenId = null;
-        update((st) => { st.pois = found; }, null);
-        MapMod.render();
-        paint();
-      }),
-    }, '🔎 Orte im Umkreis laden'),
+    button('search', 'Orte im Umkreis laden', () => poiSheet(Loc.current(), (found) => {
+      pois = found;
+      candidates = null;
+      chosenId = null;
+      update((st) => { st.pois = found; }, null);
+      MapMod.render();
+      paint();
+    })),
     status,
     el('div', { class: 'hint', text: same
       ? 'Dein nächstes ist markiert. Antwort „Nein" schließt genau dessen Umgebung aus.'
@@ -751,6 +732,93 @@ function elevationForm(body, existing, prefill) {
       if (!grid || myElevation == null) { toast('Höhendaten fehlen noch', 'error'); return null; }
       const { offline, ...rein } = grid;
       return { type: 'elevation', grid: rein, myPoint: { lat: myPoint.lat, lng: myPoint.lng }, myElevation, closer };
+    },
+  };
+}
+
+// "Bist du auf derselben Flussseite wie ich?" Der Fluss wird geladen, die eigene Seite
+// bestimmt die App aus der Fließrichtung – eingeben muss man nur die Antwort.
+const RICHTUNG = ['nördlichen', 'nordöstlichen', 'östlichen', 'südöstlichen', 'südlichen', 'südwestlichen', 'westlichen', 'nordwestlichen'];
+
+function sideForm(body, existing, prefill) {
+  let refIds = existing?.refId || (prefill?.sources && prefill.sources.length ? prefill.sources : ['river']);
+  let candidates = null;
+  let chosen = existing ? { id: existing.chosenId, name: existing.name, features: existing.features } : null;
+  let myPoint = existing?.myPoint || Loc.current() || null;
+  let same = existing?.same ?? true;
+
+  const status = el('div', { class: 'hint' });
+  const list = el('div', { class: 'pills' });
+  const info = el('div', { class: 'card-sub' });
+
+  function paintInfo() {
+    if (!chosen || !myPoint) { info.textContent = ''; return; }
+    const r = sideOfLines(myPoint, chosen.features);
+    if (!r || !r.side) { info.textContent = 'Deine Seite ist nicht bestimmbar – liegst du direkt am Wasser?'; return; }
+    info.textContent = `Du bist auf der ${RICHTUNG[Math.round(r.bearing / 45) % 8]} Seite · ${chosen.name} ${formatDistance(r.distance)} entfernt`;
+  }
+
+  function paint() {
+    clear(list);
+    for (const c of candidates || []) {
+      list.append(el('button', {
+        class: `pill ${chosen && c.id === chosen.id ? 'on' : ''}`,
+        onclick: () => { chosen = c; paint(); paintInfo(); },
+      }, `${c.name} · ${formatDistance(c.distance)}`));
+    }
+  }
+
+  async function load(ids) {
+    refIds = ids;
+    paintRefs();
+    myPoint = Loc.current() || myPoint;
+    if (!myPoint) { status.textContent = 'Kein Standort – erst Position setzen.'; return; }
+    status.textContent = 'Suche Gewässer in der Nähe …';
+    try {
+      const res = await findCandidates(myPoint, ids, { area: getState().area, limit: 6 });
+      candidates = res.candidates;
+      chosen = candidates[0] || null;
+      status.textContent = candidates.length
+        ? `Nächstes: ${candidates[0].name}${res.offline ? ' · offline' : ''}. Bei Bedarf ein anderes wählen.`
+        : 'Nichts gefunden.';
+      paint();
+      paintInfo();
+    } catch (e) {
+      status.textContent = String(e.message || e);
+    }
+  }
+
+  const refRow = el('div', { class: 'pills' });
+  function paintRefs() {
+    clear(refRow);
+    for (const r of SIDE_REFERENCES) {
+      refRow.append(el('button', {
+        class: `pill ${refIds.length === 1 && refIds[0] === r.id ? 'on' : ''}`,
+        onclick: () => load([r.id]),
+      }, r.label));
+    }
+  }
+  paintRefs();
+
+  append(body,
+    prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
+    el('label', { class: 'field' }, 'Gewässer', refRow),
+    status, list, info,
+    el('label', { class: 'field' }, 'Antwort',
+      answerSeg(['Ja – gleiche Seite', 'Nein – andere Seite'], same, (v) => { same = v; })),
+  );
+  if (existing) paintInfo(); else load(refIds);
+
+  return {
+    collect() {
+      if (!chosen || !chosen.features) { toast('Kein Gewässer gewählt', 'error'); return null; }
+      if (!myPoint) { toast('Standort fehlt', 'error'); return null; }
+      const r = sideOfLines(myPoint, chosen.features);
+      if (!r || !r.side) { toast('Deine Seite ist nicht bestimmbar', 'error'); return null; }
+      return {
+        type: 'side', refId: refIds, chosenId: chosen.id, name: chosen.name,
+        features: chosen.features, myPoint: { lat: myPoint.lat, lng: myPoint.lng }, mySide: r.side, same,
+      };
     },
   };
 }
@@ -837,6 +905,7 @@ export function renderConstraintList() {
   const s = getState();
   if (!s.constraints.length) {
     host.append(el('div', { class: 'empty' },
+      icon('questions'),
       el('div', { text: 'Noch keine Fragen ausgewertet.' }),
       el('div', { class: 'hint', style: { marginTop: '8px' }, text: 'Jede beantwortete Frage verkleinert das Suchgebiet auf der Karte.' })));
     return;
@@ -846,7 +915,9 @@ export function renderConstraintList() {
     const st = C.remainingStats(s.area, s.constraints.filter((c) => c.active !== false), 6000);
     if (st.fraction != null) {
       host.append(el('div', { class: 'card' },
-        el('div', { class: 'card-title' }, `Restgebiet: ${C.formatFraction(st)}`),
+        el('div', { class: 'card-title' },
+          el('span', { class: 'grow', text: 'Restgebiet' }),
+          el('span', { class: 'mono', text: C.formatFraction(st) })),
         el('div', { class: 'progress' }, el('i', { style: { width: `${Math.max(0.5, st.fraction * 100)}%` } })),
         el('div', { class: 'card-sub', text: st.remaining === 0
           ? 'Keine Fläche mehr übrig – widersprechen sich zwei Antworten?'
@@ -856,44 +927,38 @@ export function renderConstraintList() {
   }
 
   for (const c of [...s.constraints].reverse()) {
-    const t = C.TYPES[c.type] || { color: '#94a3b8', label: c.type };
-    host.append(el('div', { class: `card ${c.active === false ? 'off' : ''}` },
+    const t = C.TYPES[c.type] || { color: '#94a3b8', label: c.type, icon: 'info' };
+    const ic = icon(t.icon);
+    ic.style.color = t.color;
+    const an = c.active !== false;
+    host.append(el('div', { class: `card ${an ? '' : 'off'}` },
       el('div', { class: 'card-title' },
-        el('span', { class: 'dot', style: { background: t.color } }),
-        el('span', { class: 'grow', text: C.describe(c, s.settings.unit) })),
-      el('div', { class: 'card-sub', text: `${t.label} · ${formatTime(c.at || Date.now())}` }),
-      el('div', { class: 'row row-wrap' },
-        el('button', {
-          class: 'btn btn-small',
-          onclick: () => {
-            update((st) => {
-              const x = st.constraints.find((q) => q.id === c.id);
-              if (x) x.active = x.active === false;
-            }, 'Frage umgeschaltet');
-            MapMod.render();
-            renderConstraintList();
-          },
-        }, c.active === false ? 'Aktivieren' : 'Deaktivieren'),
-        el('button', { class: 'btn btn-small', onclick: () => openQuestionForm(c.type, c) }, 'Bearbeiten'),
-        el('button', {
-          class: 'btn btn-small',
-          onclick: () => {
-            const o = C.outline(c)[0];
-            const target = o?.center || o?.at || o?.points?.[1] || c.center || c.ref || c.to;
-            if (target) MapMod.flyTo(target);
-            document.querySelector('.tabbar [data-go="map"]').click();
-          },
-        }, 'Zeigen'),
+        ic,
+        el('span', { class: 'grow', text: C.describe(c) })),
+      el('div', { class: 'card-sub', text: `${c.origin === 'endgame' ? 'Endgame' : t.label} · ${formatTime(c.at || Date.now())}` }),
+      el('div', { class: 'row' },
+        iconButton(an ? 'eye' : 'eyeOff', () => {
+          update((st) => {
+            const x = st.constraints.find((q) => q.id === c.id);
+            if (x) x.active = x.active === false;
+          }, 'Frage umgeschaltet');
+          MapMod.render();
+          renderConstraintList();
+        }, an ? 'Deaktivieren' : 'Aktivieren'),
+        iconButton('edit', () => openQuestionForm(c.type, c), 'Bearbeiten'),
+        iconButton('map', () => {
+          const o = C.outline(c)[0];
+          const target = o?.center || o?.at || o?.points?.[1] || c.center || c.ref || c.to;
+          if (target) MapMod.flyTo(target);
+          document.querySelector('.tabbar [data-go="map"]').click();
+        }, 'Auf der Karte zeigen'),
         el('div', { class: 'spacer' }),
-        el('button', {
-          class: 'btn btn-small btn-danger',
-          onclick: async () => {
-            if (!(await confirmSheet('Frage löschen?', C.describe(c, s.settings.unit), { danger: true, okLabel: 'Löschen' }))) return;
-            update((st) => { st.constraints = st.constraints.filter((q) => q.id !== c.id); }, 'Frage gelöscht');
-            MapMod.render();
-            renderConstraintList();
-          },
-        }, 'Löschen'),
+        iconButton('trash', async () => {
+          if (!(await confirmSheet('Frage löschen?', C.describe(c), { danger: true, okLabel: 'Löschen' }))) return;
+          update((st) => { st.constraints = st.constraints.filter((q) => q.id !== c.id); }, 'Frage gelöscht');
+          MapMod.render();
+          renderConstraintList();
+        }, 'Löschen', 'danger'),
       ),
     ));
   }

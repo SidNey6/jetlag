@@ -85,7 +85,7 @@ function query(ql) {
   });
 }
 
-function toPoints(json, { namedOnly = true } = {}) {
+function toPoints(json, { namedOnly = true, kindOf = null } = {}) {
   const out = [];
   for (const e of json.elements || []) {
     const lat = e.lat ?? e.center?.lat;
@@ -93,7 +93,9 @@ function toPoints(json, { namedOnly = true } = {}) {
     if (lat == null || lng == null) continue;
     const name = e.tags?.name || null;
     if (namedOnly && !name) continue;
-    out.push({ id: `${e.type[0]}${e.id}`, lat, lng, name: name || 'ohne Namen' });
+    const p = { id: `${e.type[0]}${e.id}`, lat, lng, name: name || 'ohne Namen' };
+    if (kindOf) p.kind = kindOf(e.tags || {});
+    out.push(p);
   }
   // Gleichnamige Einträge zusammenfassen: OSM führt dieselbe Station oft mehrfach
   // (Relation, Node, zwei Bahnsteige). Zwei Einträge „Alexanderplatz" in einer
@@ -135,6 +137,60 @@ export async function findPois(center, categoryId, radiusM, namedOnly = true) {
   return toPoints(json, { namedOnly })
     .map((p) => ({ ...p, distance: distance(center, p) }))
     .sort((a, b) => a.distance - b.distance);
+}
+
+/* ---------- Endgame: Haltestellen und Straßennetz ---------- */
+
+// Haltestellen aller Art um einen angetippten Punkt – eine Abfrage statt drei, damit
+// das lange Drücken auf der Karte nicht in Overpass' Drosselung läuft.
+export const STOP_CATEGORIES = ['station', 'tram_subway', 'bus'];
+
+function stopKind(t) {
+  if (t.railway === 'station' && !/^(subway|light_rail)$/.test(t.station || '')) return 'station';
+  if (t.highway === 'bus_stop') return 'bus';
+  return 'tram_subway';
+}
+
+export async function findStopsNear(center, radiusM) {
+  const label = { station: 'Bahnhof', tram_subway: 'Straßen-/U-Bahn', bus: 'Bushaltestelle' };
+  let found = [];
+  if (bundleCovers(center)) {
+    for (const id of STOP_CATEGORIES) {
+      const vorrat = await bundleGet(`pois/${id}`);
+      if (vorrat) found.push(...vorrat.map((p) => ({ ...p, kind: id })));
+    }
+  }
+  if (!found.length) {
+    const statements = STOP_CATEGORIES.flatMap((id) => poiStatements(poiCategory(id)));
+    const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
+      + `${aroundUnion(statements, center, radiusM)};out center tags;`;
+    found = toPoints(await query(ql), { kindOf: stopKind });
+  }
+  return found
+    .map((p) => ({ ...p, distance: distance(center, p), kindLabel: p.kind ? label[p.kind] : null }))
+    .filter((p) => p.distance <= radiusM)
+    .sort((a, b) => a.distance - b.distance);
+}
+
+// Begehbare Wege im Umkreis. Gehwege neben der Fahrbahn, Querungen, Einfahrten und
+// Parkplatzgassen bleiben draußen: sie würden dieselbe Straße doppelt zählen oder
+// Hunderte Mini-Stücke erzeugen, die niemand "abgeht".
+const WALKABLE = '^(primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|service|track|footway|path|cycleway|steps|bridleway|primary_link|secondary_link|tertiary_link|road)$';
+
+export async function loadStreets(center, radiusM) {
+  const filter = `way["highway"~"${WALKABLE}"]["area"!="yes"]["access"!~"^(private|no)$"]`
+    + '["footway"!~"^(sidewalk|crossing)$"]["service"!~"^(driveway|parking_aisle|drive-through)$"]["indoor"!="yes"]';
+  const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
+    + `${filter}(around:${Math.round(radiusM)},${center.lat.toFixed(6)},${center.lng.toFixed(6)});out geom;`;
+  const json = await query(ql);
+  return (json.elements || [])
+    .filter((e) => e.type === 'way' && Array.isArray(e.geometry) && e.geometry.length > 1)
+    .map((e) => ({
+      id: e.id,
+      nodes: Array.isArray(e.nodes) && e.nodes.length === e.geometry.length ? e.nodes : null,
+      pts: e.geometry.map((g) => [+g.lat.toFixed(7), +g.lon.toFixed(7)]),
+      h: e.tags && e.tags.highway,
+    }));
 }
 
 /* ---------- Bezugsobjekte: Geometrie für Abstands- und Linienfragen ---------- */
@@ -243,7 +299,9 @@ function routeFeaturesFrom(json, center) {
 // zusammenhängende Linien besser: weniger Zustand, weniger Zeichenoperationen je Bild.
 // Zusammengefügt wird nur, was zum selben Objekt gehört – sonst verschmölze die A 565
 // am Autobahnkreuz mit der A 59, und "dieselbe Autobahn?" wäre nicht mehr beantwortbar.
-function mergeLines(feats) {
+// directed: nur Ende an Anfang hängen, nie ein Stück umdrehen – sonst ginge die
+// Fließrichtung verloren, an der die Flussseite hängt.
+function mergeLines(feats, directed = false) {
   const lines = feats.filter((f) => f.type === 'line');
   const rest = feats.filter((f) => f.type !== 'line');
   const near = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
@@ -259,8 +317,9 @@ function mergeLines(feats) {
         if (pool[i].key !== cur.key) continue;
         const A = cur.points, B = pool[i].points;
         if (near(A[A.length - 1], B[0])) cur.points = A.concat(B.slice(1));
-        else if (near(A[A.length - 1], B[B.length - 1])) cur.points = A.concat(B.slice().reverse().slice(1));
         else if (near(A[0], B[B.length - 1])) cur.points = B.slice(0, -1).concat(A);
+        else if (directed) continue;
+        else if (near(A[A.length - 1], B[B.length - 1])) cur.points = A.concat(B.slice().reverse().slice(1));
         else if (near(A[0], B[0])) cur.points = B.slice().reverse().slice(0, -1).concat(A);
         else continue;
         pool.splice(i, 1);
@@ -342,7 +401,7 @@ async function loadReference(center, refId, { area = null, maxKm = null, params 
     if (wider.length) feats = wider;
   }
 
-  const merged = mergeLines(feats)
+  const merged = mergeLines(feats, !!spec.directed)
     .map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
     .sort((a, b) => a.distance - b.distance);
   const slim = fitBudget(merged).map((f) => ({
@@ -688,7 +747,7 @@ export function poiSheet(center, onResult) {
       },
     }, c.label)));
     const radiusSel = el('select', {}, [300, 500, 1000, 2000, 3000, 5000, 10000, 15000, 25000, 50000].map((r) =>
-      el('option', { value: String(r), selected: r === radius }, formatDistance(r, getState().settings.unit))));
+      el('option', { value: String(r), selected: r === radius }, formatDistance(r))));
     radiusSel.addEventListener('change', () => { radius = parseInt(radiusSel.value, 10); });
     const out = el('div', { class: 'panel-body', style: { padding: '0', maxHeight: '40vh' } });
 
@@ -713,7 +772,7 @@ export function poiSheet(center, onResult) {
             out.append(el('div', { class: 'hint', text: `${found.length} Orte gefunden` }));
             for (const p of found.slice(0, 60)) {
               out.append(el('div', { class: 'row' },
-                el('div', { class: 'grow' }, el('div', { text: p.name }), el('div', { class: 'card-sub', text: formatDistance(p.distance, getState().settings.unit) }))));
+                el('div', { class: 'grow' }, el('div', { text: p.name }), el('div', { class: 'card-sub', text: formatDistance(p.distance) }))));
             }
             out.append(el('button', {
               class: 'btn btn-primary btn-wide', style: { marginTop: '10px' },
@@ -741,7 +800,7 @@ export function areaPickerSheet(center, onPick) {
     const out = el('div', { class: 'panel-body', style: { padding: '0', maxHeight: '46vh' } });
 
     const radiusSel = el('select', {}, [1000, 2000, 3000, 5000, 10000, 20000, 50000].map((r) =>
-      el('option', { value: String(r), selected: r === radius }, formatDistance(r, getState().settings.unit))));
+      el('option', { value: String(r), selected: r === radius }, formatDistance(r))));
     radiusSel.addEventListener('change', () => { radius = parseInt(radiusSel.value, 10); run(); });
 
     const search = el('input', { placeholder: 'Name filtern …' });
@@ -768,7 +827,7 @@ export function areaPickerSheet(center, onPick) {
           el('div', { class: 'card-title' },
             el('span', { class: 'grow', text: c.name }),
             inside ? el('span', { class: 'card-sub', text: 'hier' }) : null),
-          el('div', { class: 'card-sub', text: `${c.kind} · ${formatDistance(c.distance, getState().settings.unit)}${c.hasGeometry ? '' : ' · ohne Umriss'}` })));
+          el('div', { class: 'card-sub', text: `${c.kind} · ${formatDistance(c.distance)}${c.hasGeometry ? '' : ' · ohne Umriss'}` })));
       }
     }
 
@@ -822,7 +881,7 @@ function circleForPlace(c, onPick) {
             ev.target.parentElement.querySelectorAll('.pill').forEach((p) => p.classList.remove('on'));
             ev.target.classList.add('on');
           },
-        }, formatDistance(r, getState().settings.unit))))),
+        }, formatDistance(r))))),
     );
     return [
       el('button', { class: 'btn grow', onclick: () => close() }, 'Abbrechen'),

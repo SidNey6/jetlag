@@ -28,7 +28,7 @@ export function formatHectares(radiusM) {
 
 export function zoneSummary(radiusM = Rules.hidingZoneRadius()) {
   if (!radiusM) return '';
-  return `${formatDistance(radiusM, getState().settings.unit)} Radius · ${formatHectares(radiusM)}`;
+  return `${formatDistance(radiusM)} Radius · ${formatHectares(radiusM)}`;
 }
 
 // Ist die Zone gesperrt? Gibt die Phase zurück, ab der sie es ist.
@@ -68,14 +68,13 @@ export async function openAnchorPicker() {
   const catId = hz.anchorCategory || 'station';
   const cat = poiCategory(catId);
   const anzahl = hz.anchorChoices || 3;
-  const unit = getState().settings.unit;
 
   openSheet(`Versteckzone an ${cat ? cat.label : 'Haltestelle'}`, (body, close) => {
     const out = el('div', {}, el('div', { class: 'hint', text: 'Suche die nächstgelegenen …' }));
     body.append(
       hz.rules && hz.rules.length ? el('div', { class: 'hint', text: hz.rules[0] }) : null,
       hz.anchorToleranceM != null
-        ? el('div', { class: 'card-sub', text: `Als Mittelpunkt gilt das Schild, ±${formatDistance(hz.anchorToleranceM, unit)}.` })
+        ? el('div', { class: 'card-sub', text: `Als Mittelpunkt gilt das Schild, ±${formatDistance(hz.anchorToleranceM)}.` })
         : null,
       out,
     );
@@ -95,7 +94,7 @@ export async function openAnchorPicker() {
             onclick: async () => { close(); await setHidingZone(p, p.name); },
           },
             el('div', { class: 'card-title', text: p.name }),
-            el('div', { class: 'card-sub', text: `${formatDistance(p.distance, unit)} entfernt` })));
+            el('div', { class: 'card-sub', text: `${formatDistance(p.distance)} entfernt` })));
         }
       } catch (e) {
         out.textContent = String(e.message || e);

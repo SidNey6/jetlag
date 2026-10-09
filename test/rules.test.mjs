@@ -10,8 +10,6 @@ const data = JSON.parse(readFileSync(join(ROOT, 'rules/lifack.json'), 'utf8'));
 const Rules = await import('../js/rules.js');
 const State = await import('../js/state.js');
 
-const MILE = 1609.344;
-
 test('Mitgelieferte Regeldatei besteht die Prüfung', () => {
   assert.doesNotThrow(() => Rules.validateRules(data));
 });
@@ -22,10 +20,10 @@ test('Spielgrößen tragen die Werte der Quelle', () => {
   assert.equal(by.small.hidingPeriodMinutes, 30);
   assert.equal(by.medium.hidingPeriodMinutes, 60);
   assert.equal(by.large.hidingPeriodMinutes, 180);
-  // Versteckzone: ¼ Meile bei klein/mittel, ½ Meile bei groß
-  assert.ok(Math.abs(by.small.hidingZoneRadiusM - MILE / 4) < 0.01);
-  assert.ok(Math.abs(by.medium.hidingZoneRadiusM - MILE / 4) < 0.01);
-  assert.ok(Math.abs(by.large.hidingZoneRadiusM - MILE / 2) < 0.01);
+  // Versteckzone: ¼ Meile bei klein/mittel, ½ Meile bei groß – metrisch gerundet
+  assert.equal(by.small.hidingZoneRadiusM, 400);
+  assert.equal(by.medium.hidingZoneRadiusM, 400);
+  assert.equal(by.large.hidingZoneRadiusM, 800);
   assert.equal(by.large.photoMinutes, 20);
   assert.equal(by.small.photoMinutes, 10);
 });
@@ -42,25 +40,30 @@ test('Sechs Kategorien mit den Ziehwerten der Quelle', () => {
   for (const q of Object.values(by)) assert.ok(q.minutes === 5 || q.minutesBySize, `${q.id}`);
 });
 
-test('Distanzen entsprechen exakt den Meilenwerten', () => {
+// Die Meilenwerte der Quelle, auf runde metrische Werte umgestellt
+test('Distanzen sind metrisch und entsprechen den Meilenstufen der Quelle', () => {
   const radar = data.questions.find((q) => q.id === 'radar');
-  const erwartet = [0.25, 0.5, 1, 3, 5, 10, 25, 50, 100];
-  assert.equal(radar.options.length, erwartet.length);
-  radar.options.forEach((o, i) => {
-    assert.ok(Math.abs(o.meters - erwartet[i] * MILE) < 0.01, `${o.label}: ${o.meters}`);
-  });
+  assert.deepEqual(radar.options.map((o) => o.meters), [400, 800, 1600, 5000, 8000, 16000, 40000, 80000, 160000]);
   const thermo = data.questions.find((q) => q.id === 'thermometer');
-  assert.deepEqual(thermo.options.map((o) => o.meters / MILE), [0.5, 3, 10, 50]);
+  assert.deepEqual(thermo.options.map((o) => o.meters), [800, 5000, 16000, 80000]);
+  // Höchstens 10 % Abweichung vom Original, damit die Spielbalance bleibt
+  const meilen = [0.25, 0.5, 1, 3, 5, 10, 25, 50, 100];
+  radar.options.forEach((o, i) => assert.ok(Math.abs(o.meters / (meilen[i] * 1609.344) - 1) < 0.1, o.label));
+});
+
+test('Keine Meilen mehr in der Regeldatei', () => {
+  const text = JSON.stringify({ ...data, sourceNote: '' });
+  assert.ok(!/Meile|\d\s*Fuß/.test(text), 'Meilen- oder Fußangabe übrig');
 });
 
 test('Größenabhängige Optionen sind richtig eingeschränkt', () => {
   const thermo = data.questions.find((q) => q.id === 'thermometer');
-  assert.deepEqual(thermo.options.find((o) => o.meters === 10 * MILE).sizes, ['medium', 'large']);
-  assert.deepEqual(thermo.options.find((o) => o.meters === 50 * MILE).sizes, ['large']);
+  assert.deepEqual(thermo.options.find((o) => o.meters === 16000).sizes, ['medium', 'large']);
+  assert.deepEqual(thermo.options.find((o) => o.meters === 80000).sizes, ['large']);
   const tent = data.questions.find((q) => q.id === 'tentacles');
   // 1-Meilen-Orte ab mittel, 15-Meilen-Orte nur groß
   for (const o of tent.options) {
-    assert.deepEqual(o.sizes, o.meters === MILE ? ['medium', 'large'] : ['large'], o.label);
+    assert.deepEqual(o.sizes, o.meters === 1600 ? ['medium', 'large'] : ['large'], o.label);
   }
 });
 
@@ -78,7 +81,7 @@ function registries() {
 function knownFor(q, o, reg) {
   const typ = 'appType' in o ? o.appType : q.appType;
   const ids = Array.isArray(o.osm) ? o.osm : [o.osm];
-  if (typ === 'compare') return ids.every((id) => reg.refs.has(id));
+  if (typ === 'compare' || typ === 'side') return ids.every((id) => reg.refs.has(id));
   return ids.every((id) => reg.poi.has(id) || reg.refs.has(id));
 }
 
@@ -156,9 +159,9 @@ test('Loader filtert Optionen nach eingestellter Spielgröße', () => {
 
   Rules.setSize('medium');
   assert.equal(Rules.optionsFor('tentacles').length, 4, 'mittel: nur die 1-Meilen-Orte');
-  assert.deepEqual(Rules.distancePresets('radar').map((m) => m / MILE), [0.25, 0.5, 1, 3, 5, 10, 25, 50, 100]);
+  assert.deepEqual(Rules.distancePresets('radar'), [400, 800, 1600, 5000, 8000, 16000, 40000, 80000, 160000]);
   assert.equal(Rules.drawLabel(Rules.category('tentacles')), '4 ziehen, 2 behalten');
-  assert.ok(Math.abs(Rules.hidingZoneRadius() - MILE / 4) < 0.01);
+  assert.equal(Rules.hidingZoneRadius(), 400);
   assert.equal(Rules.hidingPeriodMinutes(), 60);
 });
 

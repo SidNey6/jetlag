@@ -2,7 +2,7 @@
 // Cache bedienen, Overpass niemals cachen (veraltete Geodaten wären schlimmer als
 // eine ehrliche Fehlermeldung).
 
-const VERSION = 'v1.5.0';
+const VERSION = 'v1.6.0';
 const APP_CACHE = `jetlag-app-${VERSION}`;
 const TILE_CACHE = 'jetlag-tiles-v1';
 
@@ -35,9 +35,14 @@ const SHELL = [
   './js/zone.js',
   './js/bundle.js',
   './js/prefetch.js',
+  './js/streets.js',
+  './js/endgame.js',
+  './js/wakelock.js',
   './rules/lifack.json',
   './js/ui/ui.js',
+  './js/ui/icons.js',
   './vendor/leaflet/LICENSE',
+  './vendor/lucide/LICENSE',
   './vendor/qrcode/LICENSE',
   './vendor/leaflet/leaflet.js',
   './vendor/leaflet/leaflet.css',

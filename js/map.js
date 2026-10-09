@@ -19,8 +19,18 @@ let follow = true;
 let measure = null;      // {points:[], line, markers:[]}
 let picking = null;      // {resolve, banner}
 let longPressTimer = null;
+let suspended = false;   // Taschenmodus: Karte ist verdeckt, nichts zeichnen
 
 export function getMap() { return map; }
+
+export function setSuspended(on) {
+  suspended = on;
+  if (!on) {
+    lastDrawn = null;
+    renderMe(Loc.current());
+    render();
+  }
+}
 
 export function initMap() {
   const s = getState();
@@ -92,7 +102,7 @@ function renderMe(pos) {
   const showError = Loc.error() && (!pos || pos.source === 'gps');
   if (el0) el0.textContent = showError ? Loc.error() : Loc.sourceLabel();
   if (el1) el1.textContent = pos ? `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}` : '–';
-  if (!pos || !map) return;
+  if (!pos || !map || suspended) return;
   if (!worthRedrawing(pos)) return;
   const quelleGewechselt = !lastDrawn || lastDrawn.source !== pos.source;
   lastDrawn = pos;
@@ -104,7 +114,7 @@ function renderMe(pos) {
       zIndexOffset: 1000,
       interactive: false,
     }).addTo(map);
-    meAccuracy = L.circle([pos.lat, pos.lng], { radius: 0, color: '#38bdf8', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
+    meAccuracy = L.circle([pos.lat, pos.lng], { radius: 0, color: '#4d8df5', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
   } else {
     meMarker.setLatLng([pos.lat, pos.lng]);
     // Das Symbol nur austauschen, wenn sich die Art der Position geändert hat –
@@ -142,7 +152,7 @@ export function isFollowing() { return follow; }
 /* ---------- Zeichnen des Zustands ---------- */
 
 export function render() {
-  if (!map) return;
+  if (!map || suspended) return;
   const s = getState();
   const active = s.constraints.filter((c) => c.active !== false);
 
@@ -163,11 +173,13 @@ export function render() {
   mask.setVisible(s.ui.showMask !== false);
 
   layers.outlines.clearLayers();
+  const mitte = s.settings.showCenters !== false;
   for (const c of active) {
     const color = (C.TYPES[c.type] || {}).color || '#94a3b8';
     for (const o of C.outline(c)) {
       if (o.kind === 'circle') {
         L.circle(o.center, { radius: o.radius, color, weight: 1, opacity: 0.5, fill: false, interactive: false }).addTo(layers.outlines);
+        if (mitte) centerDot(o.center, color).addTo(layers.outlines);
       } else if (o.kind === 'path') {
         const cls = o.closed ? L.polygon : L.polyline;
         cls(o.points, {
@@ -178,7 +190,7 @@ export function render() {
       } else if (o.kind === 'dot') {
         L.circleMarker(o.at, {
           radius: o.strong ? 6 : 4, color, weight: 2,
-          fillColor: o.strong ? color : '#0b1020', fillOpacity: 1, interactive: false,
+          fillColor: o.strong ? color : '#0e0f11', fillOpacity: 1, interactive: false,
         }).addTo(layers.outlines);
       }
     }
@@ -188,6 +200,7 @@ export function render() {
   const ring = C.areaRing(s.area);
   if (ring) {
     L.polygon(ring, { color: '#e2e8f0', weight: 2, dashArray: '6 5', fill: false, interactive: false }).addTo(layers.area);
+    if (mitte && s.area.type === 'circle') centerDot(s.area.center, '#e2e8f0').addTo(layers.area);
   }
 
   // Versteckzone aus dem Regelwerk – der Kreis, in dem sich der Versteckende bewegen darf
@@ -226,9 +239,16 @@ export function render() {
   layers.pois.clearLayers();
   for (const p of s.pois) {
     L.circleMarker([p.lat, p.lng], {
-      radius: 5, color: '#fbbf24', weight: 2, fillColor: '#0b1020', fillOpacity: 1,
+      radius: 5, color: '#fbbf24', weight: 2, fillColor: '#0e0f11', fillOpacity: 1,
     }).addTo(layers.pois).bindTooltip(p.name || 'POI', { direction: 'top', className: 'jl-label' });
   }
+}
+
+// Kleiner Marker im Mittelpunkt eines Kreises (abschaltbar unter Einstellungen → Karte)
+function centerDot(p, color) {
+  return L.circleMarker([p.lat, p.lng], {
+    radius: 3.5, color: '#0f1012', weight: 1.5, fillColor: color, fillOpacity: 1, interactive: false,
+  });
 }
 
 function padBounds(b, f) {
@@ -328,7 +348,7 @@ export function toggleMeasure() {
   drawRadiusRings(true);
   const rings = getState().settings.radiusRings;
   showMeasure(rings.length && Loc.current()
-    ? `Ringe: ${rings.map((r) => formatDistance(r, getState().settings.unit)).join(' · ')} — zwei Punkte antippen`
+    ? `Ringe: ${rings.map((r) => formatDistance(r)).join(' · ')} — zwei Punkte antippen`
     : 'Punkte antippen – Distanz und Peilung erscheinen hier');
   return true;
 }
@@ -345,11 +365,10 @@ export function drawRadiusRings(on) {
   layers.rings.clearLayers();
   const me = Loc.current();
   if (!on || !me) return;
-  const unit = getState().settings.unit;
   for (const r of getState().settings.radiusRings) {
-    L.circle(me, { radius: r, color: '#38bdf8', weight: 1, opacity: 0.55, fill: false, dashArray: '4 5', interactive: false })
+    L.circle(me, { radius: r, color: '#4d8df5', weight: 1, opacity: 0.55, fill: false, dashArray: '4 5', interactive: false })
       .addTo(layers.rings)
-      .bindTooltip(formatDistance(r, unit), { permanent: true, direction: 'top', className: 'jl-label' });
+      .bindTooltip(formatDistance(r), { permanent: true, direction: 'top', className: 'jl-label' });
   }
 }
 
@@ -359,18 +378,16 @@ function addMeasurePoint(latlng) {
   if (measure.points.length > 2) measure.points = [p];
   layers.measure.clearLayers();
   for (const q of measure.points) {
-    L.circleMarker(q, { radius: 5, color: '#38bdf8', fillColor: '#38bdf8', fillOpacity: 1 }).addTo(layers.measure);
+    L.circleMarker(q, { radius: 5, color: '#4d8df5', fillColor: '#4d8df5', fillOpacity: 1 }).addTo(layers.measure);
   }
   if (measure.points.length === 2) {
     const [a, b] = measure.points;
-    L.polyline([a, b], { color: '#38bdf8', weight: 2.5 }).addTo(layers.measure);
-    const unit = getState().settings.unit;
-    showMeasure(`${formatDistance(distance(a, b), unit)} · ${formatBearing(bearing(a, b))}`);
+    L.polyline([a, b], { color: '#4d8df5', weight: 2.5 }).addTo(layers.measure);
+    showMeasure(`${formatDistance(distance(a, b))} · ${formatBearing(bearing(a, b))}`);
   } else {
     const me = Loc.current();
-    const unit = getState().settings.unit;
     showMeasure(me
-      ? `Von dir: ${formatDistance(distance(me, p), unit)} · ${formatBearing(bearing(me, p))} — zweiten Punkt antippen`
+      ? `Von dir: ${formatDistance(distance(me, p))} · ${formatBearing(bearing(me, p))} — zweiten Punkt antippen`
       : 'Zweiten Punkt antippen');
   }
 }

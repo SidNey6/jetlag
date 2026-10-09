@@ -3,14 +3,14 @@
 // Aufwecken falsch. Der Tick zeichnet nur, er misst nicht.
 
 import { getState, update, uid } from './state.js';
-import { el, clear, openSheet, toast, formatClock, segmented } from './ui/ui.js';
+import { el, clear, openSheet, toast, formatClock, segmented, icon, iconButton, button } from './ui/ui.js';
+import { wantAwake } from './wakelock.js';
 
 // Die Anzeige ist sekundengenau – ein Vierteltakt hätte nur viermal so viele
 // Aufwachvorgänge gekostet, ohne dass man etwas davon sieht.
 const TICK_MS = 1000;
 
 let ticker = null;
-let wakeLock = null;
 let audioCtx = null;
 
 export function elapsed(t, now = Date.now()) {
@@ -62,13 +62,43 @@ export function resetTimer(id) {
   });
 }
 
+// Zeit hinzufügen (ms > 0) oder abziehen (ms < 0). Beim Countdown ändert sich die
+// Restzeit, bei der Stoppuhr die gemessene Zeit. Wird ein Countdown dadurch fällig,
+// meldet er sich beim nächsten Takt wie gewohnt.
 export function addTime(id, ms) {
   update((s) => {
     const t = s.timers.find((x) => x.id === id);
     if (!t) return;
-    if (t.kind === 'countdown') { t.duration = Math.max(0, t.duration + ms); t.alarmed = false; }
-    else t.accumulated = Math.max(0, (t.accumulated || 0) + ms);
+    const now = Date.now();
+    if (t.kind === 'countdown') {
+      t.duration = Math.max(0, t.duration + ms);
+      t.alarmed = t.alarmed && remaining(t, now) <= 0;
+    } else {
+      setElapsed(t, Math.max(0, elapsed(t, now) + ms), now);
+    }
   });
+  ensureTicking();
+}
+
+// Restzeit (Countdown) bzw. Stand (Stoppuhr) direkt setzen
+export function setTimerValue(id, ms) {
+  update((s) => {
+    const t = s.timers.find((x) => x.id === id);
+    if (!t) return;
+    const now = Date.now();
+    if (t.kind === 'countdown') {
+      t.duration = Math.max(0, elapsed(t, now) + ms);
+      t.alarmed = false;
+    } else {
+      setElapsed(t, Math.max(0, ms), now);
+    }
+  });
+  ensureTicking();
+}
+
+function setElapsed(t, ms, now) {
+  t.accumulated = ms;
+  if (t.running) t.startedAt = now;
 }
 
 export function removeTimer(id) {
@@ -119,7 +149,7 @@ export function ringAlarm(text) {
 function fireAlarm(t) {
   beep();
   if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 500]);
-  toast(`⏰ ${t.name} abgelaufen`, 'error');
+  toast(`${t.name} abgelaufen`, 'error');
   if ('Notification' in window && Notification.permission === 'granted') {
     try { new Notification('Jetlag Toolkit', { body: `${t.name} abgelaufen`, tag: t.id }); } catch (e) { /* egal */ }
   }
@@ -127,23 +157,12 @@ function fireAlarm(t) {
 
 /* ---------- Wake Lock ---------- */
 
-async function refreshWakeLock() {
-  const s = getState();
-  const wants = s.settings.keepAwake && s.timers.some((t) => t.running);
-  if (wants && !wakeLock && 'wakeLock' in navigator) {
-    try {
-      wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => { wakeLock = null; });
-    } catch (e) { wakeLock = null; }
-  } else if (!wants && wakeLock) {
-    try { await wakeLock.release(); } catch (e) { /* egal */ }
-    wakeLock = null;
-  }
+function refreshWakeLock() {
+  wantAwake('timers', getState().timers.some((t) => t.running));
 }
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    refreshWakeLock();
     ensureTicking();
     tick();
   } else if (ticker) {
@@ -300,26 +319,69 @@ export function renderTimers() {
       // Antwortfristen enden nicht von selbst: erst "Antwort da" zeigt, ob und wie weit
       // sie überzogen wurde – daran hängen die Folgen aus dem Regelwerk.
       t.meta && t.meta.purpose === 'answer' ? el('div', { class: 'row row-wrap' },
-        el('button', {
-          class: 'btn btn-small btn-primary',
-          onclick: () => document.dispatchEvent(new CustomEvent('jetlag:answer', { detail: { timerId: t.id } })),
-        }, '✓ Antwort da'),
-        el('button', {
-          class: 'btn btn-small',
-          onclick: () => document.dispatchEvent(new CustomEvent('jetlag:answer', { detail: { timerId: t.id, excused: true } })),
-        }, '✓ entschuldigt'),
+        button('check', 'Antwort da',
+          () => document.dispatchEvent(new CustomEvent('jetlag:answer', { detail: { timerId: t.id } })),
+          'btn btn-small btn-primary'),
+        button('check', 'Entschuldigt',
+          () => document.dispatchEvent(new CustomEvent('jetlag:answer', { detail: { timerId: t.id, excused: true } }))),
       ) : null,
-      el('div', { class: 'row row-wrap' },
-        el('button', { class: 'btn btn-small', onclick: () => { primeAudio(); toggleTimer(t.id); renderTimers(); } }, t.running ? '⏸ Pause' : '▶︎ Start'),
-        el('button', { class: 'btn btn-small', onclick: () => { resetTimer(t.id); renderTimers(); } }, '↺'),
-        el('button', { class: 'btn btn-small', onclick: () => { addTime(t.id, 60000); renderTimers(); } }, '+1'),
-        el('button', { class: 'btn btn-small', onclick: () => { addTime(t.id, 300000); renderTimers(); } }, '+5'),
+      el('div', { class: 'row timer-controls' },
+        iconButton(t.running ? 'pause' : 'play', () => { primeAudio(); toggleTimer(t.id); renderTimers(); },
+          t.running ? 'Pause' : 'Start', 'icon-btn-solid'),
+        el('div', { class: 'stepper' },
+          el('button', { onclick: () => { addTime(t.id, -60000); updateFaces(); }, 'aria-label': 'Eine Minute weniger' }, icon('minus')),
+          el('span', { class: 'stepper-label', text: '1 min' }),
+          el('button', { onclick: () => { addTime(t.id, 60000); updateFaces(); }, 'aria-label': 'Eine Minute mehr' }, icon('plus'))),
+        iconButton('sliders', () => openAdjustSheet(t.id), 'Zeit anpassen'),
         el('div', { class: 'spacer' }),
-        el('button', { class: 'btn btn-small btn-danger', onclick: () => { removeTimer(t.id); renderTimers(); } }, '✕'),
+        iconButton('reset', () => { resetTimer(t.id); renderTimers(); }, 'Zurücksetzen'),
+        iconButton('trash', () => { removeTimer(t.id); renderTimers(); }, 'Löschen', 'danger'),
       ),
     ));
   }
   updateBadge();
+}
+
+// Zeit gezielt korrigieren: z. B. weil eine Nachricht verspätet ankam
+function openAdjustSheet(id) {
+  const t = getState().timers.find((x) => x.id === id);
+  if (!t) return;
+  const countdown = t.kind === 'countdown';
+  let takt = null;
+  openSheet(`${t.name} anpassen`, (body, close) => {
+    const readout = el('div', { class: 'timer-face', style: { textAlign: 'center' } });
+    const paint = () => {
+      const cur = getState().timers.find((x) => x.id === id);
+      if (cur) readout.textContent = formatClock(remaining(cur));
+    };
+    paint();
+    const step = (min) => el('button', {
+      class: 'pill',
+      onclick: () => { addTime(id, min * 60000); paint(); renderTimers(); },
+    }, `${min > 0 ? '+' : '−'}${Math.abs(min)} min`);
+
+    const input = el('input', { type: 'number', inputmode: 'decimal', min: '0', step: '0.5', placeholder: 'Minuten' });
+    body.append(
+      readout,
+      el('div', { class: 'hint', style: { textAlign: 'center' }, text: countdown ? 'Restzeit' : 'Gemessene Zeit' }),
+      el('div', { class: 'pills pills-center' }, step(-10), step(-5), step(-1)),
+      el('div', { class: 'pills pills-center' }, step(1), step(5), step(10)),
+      el('label', { class: 'field' }, countdown ? 'Restzeit setzen (Minuten)' : 'Stand setzen (Minuten)',
+        el('div', { class: 'row' }, input,
+          el('button', {
+            class: 'btn',
+            onclick: () => {
+              const v = parseFloat(String(input.value).replace(',', '.'));
+              if (!isFinite(v) || v < 0) return toast('Keine gültige Zahl', 'error');
+              setTimerValue(id, Math.round(v * 60000));
+              paint();
+              renderTimers();
+            },
+          }, 'Setzen'))),
+    );
+    takt = setInterval(paint, 1000);
+    return [el('button', { class: 'btn grow btn-primary', onclick: () => close() }, 'Fertig')];
+  }, { onClose: () => clearInterval(takt) });
 }
 
 function updateBadge() {

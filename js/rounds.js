@@ -3,7 +3,7 @@
 // entscheidet die Hausregel.
 
 import { getState, update, uid } from './state.js';
-import { el, clear, openSheet, confirmSheet, promptSheet, toast, formatClock, formatTime } from './ui/ui.js';
+import { el, clear, openSheet, confirmSheet, promptSheet, toast, formatClock, formatTime, icon, button } from './ui/ui.js';
 import { activeRound, currentPhase, netDuration, PHASE_LABEL, deadlineStatus as fristen } from './phases.js';
 import * as Rules from './rules.js';
 import { ringAlarm, elapsed, removeTimer } from './timers.js';
@@ -11,10 +11,11 @@ import { distance, formatDistance } from './geo.js';
 import * as Loc from './location.js';
 import * as Zone from './zone.js';
 import { poiCategory } from './sources.js';
+import * as Endgame from './endgame.js';
 
 export { activeRound };
 
-const COLORS = ['#38bdf8', '#f472b6', '#34d399', '#fbbf24', '#a78bfa', '#fb7185', '#22d3ee', '#facc15'];
+const COLORS = ['#4d8df5', '#e07aa8', '#3ecf8e', '#e3b341', '#a48bf0', '#f08a4b', '#3fb6d3', '#c9d36b'];
 
 export function addTeam(name) {
   update((s) => {
@@ -205,10 +206,11 @@ export function render() {
     host.append(el('div', { class: 'card' },
       el('div', { class: 'card-title', text: 'Keine Runde aktiv' }),
       s.game.teams.length
-        ? el('div', { class: 'pills' }, s.game.teams.map((t) => el('button', {
-          class: 'pill', onclick: () => { startRound(t.id); render(); },
-        }, `▶︎ ${t.name}`)))
+        ? el('div', { class: 'hint', text: 'Welches Team versteckt sich?' })
         : el('div', { class: 'hint', text: 'Erst ein Team anlegen.' }),
+      s.game.teams.length
+        ? el('div', { class: 'row row-wrap' }, s.game.teams.map((t) => button('play', t.name, () => { startRound(t.id); render(); })))
+        : null,
     ));
   }
 
@@ -228,21 +230,15 @@ export function render() {
   }
 
   host.append(el('div', { class: 'row row-wrap' },
-    el('button', {
-      class: 'btn btn-small',
-      onclick: async () => {
-        const name = await promptSheet('Team anlegen', { label: 'Name', placeholder: 'Team Blau' });
-        if (name) { addTeam(name); render(); }
-      },
-    }, '+ Team'),
-    el('button', {
-      class: 'btn btn-small',
-      onclick: async () => {
-        const text = await promptSheet('Notiz ins Protokoll', { label: 'Text', multiline: true });
-        if (text) { logNote(text); render(); toast('Notiert', 'ok'); }
-      },
-    }, '+ Notiz'),
-    el('button', { class: 'btn btn-small', onclick: () => openTeamManager() }, 'Teams verwalten'),
+    button('plus', 'Team', async () => {
+      const name = await promptSheet('Team anlegen', { label: 'Name', placeholder: 'Team Blau' });
+      if (name) { addTeam(name); render(); }
+    }),
+    button('note', 'Notiz', async () => {
+      const text = await promptSheet('Notiz ins Protokoll', { label: 'Text', multiline: true });
+      if (text) { logNote(text); render(); toast('Notiert', 'ok'); }
+    }),
+    s.game.teams.length ? button('users', 'Teams', () => openTeamManager()) : null,
   ));
 
   const log = [...s.game.log].reverse().slice(0, 80);
@@ -272,7 +268,6 @@ function fillRoundCard(box, round) {
   const now = Date.now();
   const phase = currentPhase(round);
   const s = getState();
-  const unit = s.settings.unit;
 
   box.append(
     el('div', { class: 'card-sub', text: `Laufende Runde · ${PHASE_LABEL[phase]}` }),
@@ -282,7 +277,7 @@ function fillRoundCard(box, round) {
       + (round.deductionMs ? ` · ${formatClock(round.deductionMs)} Abzug eingerechnet` : '') }),
   );
   if (round.verdict) {
-    box.append(el('div', { class: 'toast error', style: { position: 'static' }, text: `Entschieden: ${round.verdict.label}` }));
+    box.append(el('div', { class: 'verdict', text: `Entschieden: ${round.verdict.label}` }));
   }
 
   // Fristen des Regelwerks
@@ -310,7 +305,7 @@ function fillRoundCard(box, round) {
   if (phase === 'endgame' && (eg.answerWithinM != null || eg.hiderMayMove === false)) {
     const teile = [];
     if (eg.hiderMayMove === false) teile.push('nicht mehr bewegen');
-    if (eg.answerWithinM != null) teile.push(`Antworten nur innerhalb ${formatDistance(eg.answerWithinM, unit)} vom Versteckpunkt`);
+    if (eg.answerWithinM != null) teile.push(`Antworten nur innerhalb ${formatDistance(eg.answerWithinM)} vom Versteckpunkt`);
     box.append(el('div', { class: 'hint', text: `Endgame: ${teile.join(', ')}` }));
     const me = Loc.current();
     if (s.hidingSpot && me && eg.answerWithinM != null) {
@@ -318,7 +313,7 @@ function fillRoundCard(box, round) {
       const ok = d <= eg.answerWithinM;
       const genau = me.accuracy ? ` (GPS ±${Math.round(me.accuracy)} m)` : '';
       box.append(el('div', { class: 'card-sub', style: { color: ok ? 'var(--ok)' : 'var(--warn)' },
-        text: `Abstand zum Versteckpunkt: ${formatDistance(d, unit)}${genau}` }));
+        text: `Abstand zum Versteckpunkt: ${formatDistance(d)}${genau}` }));
     }
   }
 
@@ -331,19 +326,26 @@ function fillRoundCard(box, round) {
       + (lock ? ` · festgelegt seit ${formatTime(lock.at)}` : '') }));
   }
 
+  // Endgame der Sucher: Haltestelle, Fortschritt beim Straßenabgehen
+  const suche = Endgame.summary();
+  if (suche) {
+    box.append(el('div', { class: 'card-sub', text: `Endgame an ${suche.title} · ${suche.line} · ${suche.track} gelaufen${suche.recording ? '' : ' · pausiert'}` }));
+  }
+
   const knoepfe = el('div', { class: 'row row-wrap' });
   if (hz.anchorCategory && !Zone.zoneLockedSince()) {
     const cat = poiCategory(hz.anchorCategory);
-    knoepfe.append(el('button', { class: 'btn btn-small', onclick: () => Zone.openAnchorPicker() },
-      `⭕ Zone an ${cat ? cat.label : 'Haltestelle'}`));
+    knoepfe.append(button('zone', `Zone an ${cat ? cat.label : 'Haltestelle'}`, () => Zone.openAnchorPicker()));
   }
   if (phase === 'roundStart') {
-    knoepfe.append(el('button', { class: 'btn btn-small', onclick: () => { markPhase('searchStart'); render(); } }, 'Versteckzeit vorbei · Suche beginnt'));
+    knoepfe.append(button('play', 'Suche beginnt', () => { markPhase('searchStart'); render(); }));
   }
-  if (phase === 'searchStart') {
-    knoepfe.append(el('button', { class: 'btn btn-small', onclick: () => { markPhase('endgame'); render(); } }, 'Endgame erreicht'));
+  if (suche) {
+    knoepfe.append(button('endgame', 'Endgame', () => Endgame.openEndgameSheet()));
+  } else if (phase === 'searchStart' || phase === 'endgame') {
+    knoepfe.append(button('endgame', 'Endgame starten', () => Endgame.openStopPicker()));
   }
-  knoepfe.append(el('button', { class: 'btn btn-small btn-primary', onclick: () => { endRound(round.id); render(); } }, 'Gefunden · Runde beenden'));
+  knoepfe.append(button('check', 'Gefunden', () => { endRound(round.id); render(); }, 'btn btn-small btn-primary'));
   box.append(knoepfe);
 }
 

@@ -3,7 +3,7 @@
 // hier trägt jede Gruppe ihr eigenes ein.
 
 import { getState, update, uid } from './state.js';
-import { el, clear, openSheet, confirmSheet, promptSheet, toast } from './ui/ui.js';
+import { el, clear, openSheet, confirmSheet, promptSheet, toast, button, iconButton, icon } from './ui/ui.js';
 import { logNote } from './rounds.js';
 
 const DICE = [2, 4, 6, 8, 10, 12, 20, 100];
@@ -36,15 +36,12 @@ export function openDiceSheet() {
     };
     body.append(result, history,
       el('div', { class: 'pills' }, DICE.map((d) => el('button', { class: 'pill', onclick: () => roll(d) }, `W${d}`))),
-      el('button', {
-        class: 'btn btn-wide',
-        onclick: () => {
-          const v = rollDie(2);
-          result.textContent = v === 1 ? 'Kopf' : 'Zahl';
-          past.unshift(`Münze: ${result.textContent}`);
-          history.textContent = past.slice(0, 8).join('  ·  ');
-        },
-      }, '🪙 Münze werfen'));
+      button('coins', 'Münze werfen', () => {
+        const v = rollDie(2);
+        result.textContent = v === 1 ? 'Kopf' : 'Zahl';
+        past.unshift(`Münze: ${result.textContent}`);
+        history.textContent = past.slice(0, 8).join('  ·  ');
+      }, 'btn btn-wide'));
     return [el('button', { class: 'btn grow', onclick: () => close() }, 'Fertig')];
   });
 }
@@ -79,7 +76,7 @@ export function openListsSheet() {
                 showDraw(list.name, pick);
                 render();
               },
-            }, '🎴 Ziehen'),
+            }, icon('cards'), 'Ziehen'),
             el('button', {
               class: 'btn btn-small',
               onclick: async () => {
@@ -99,14 +96,11 @@ export function openListsSheet() {
               onclick: () => { update((st) => { st.lists.find((x) => x.id === list.id).drawn = []; }); render(); },
             }, 'Stapel zurück') : null,
             el('div', { class: 'spacer' }),
-            el('button', {
-              class: 'btn btn-small btn-danger',
-              onclick: async () => {
-                if (!(await confirmSheet('Liste löschen?', list.name, { danger: true, okLabel: 'Löschen' }))) return;
-                update((st) => { st.lists = st.lists.filter((x) => x.id !== list.id); }, 'Liste gelöscht');
-                render();
-              },
-            }, '✕'),
+            iconButton('trash', async () => {
+              if (!(await confirmSheet('Liste löschen?', list.name, { danger: true, okLabel: 'Löschen' }))) return;
+              update((st) => { st.lists = st.lists.filter((x) => x.id !== list.id); }, 'Liste gelöscht');
+              render();
+            }, 'Liste löschen', 'danger'),
           ),
         ));
       }
@@ -121,7 +115,7 @@ export function openListsSheet() {
           }, 'Liste angelegt');
           render();
         },
-      }, '+ Liste anlegen'));
+      }, icon('plus'), 'Liste anlegen'));
     };
     render();
     return [];

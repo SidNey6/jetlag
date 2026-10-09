@@ -2,9 +2,9 @@
   "schemaVersion": 2,
   "id": "lifack-hide-and-seek",
   "name": "Hide and Seek (lifack.ch)",
-  "version": "2026-09-17",
+  "version": "2026-10-09",
   "source": "https://www.lifack.ch/docs/quick_start_guide/",
-  "sourceNote": "Werte übernommen von lifack.ch, einer inoffiziellen Fan-Umsetzung von Jet Lag: Hide and Seek. Nicht mit Jet Lag, Nebula oder Wendover Productions verbunden. Originalmaße sind Meilen; hier in Metern hinterlegt, damit die App rechnen kann.",
+  "sourceNote": "Werte übernommen von lifack.ch, einer inoffiziellen Fan-Umsetzung von Jet Lag: Hide and Seek. Nicht mit Jet Lag, Nebula oder Wendover Productions verbunden. Die Originalmaße in Meilen sind hier auf runde metrische Werte umgestellt (¼ Meile → 400 m, 1 Meile → 1,6 km, 3 Meilen → 5 km). Ergänzt um die Matching-Frage „Flussseite“.",
   "unitsOfOrigin": "imperial",
   "gameSizes": [
     {
@@ -13,8 +13,8 @@
       "description": "Eine Kleinstadt oder ein Teil einer Großstadt",
       "typicalDuration": "4–8 Stunden",
       "hidingPeriodMinutes": 30,
-      "hidingZoneRadiusM": 402.336,
-      "hidingZoneLabel": "¼ Meile",
+      "hidingZoneRadiusM": 400,
+      "hidingZoneLabel": "400 m",
       "answerMinutes": 5,
       "photoMinutes": 10
     },
@@ -24,8 +24,8 @@
       "description": "Eine Großstadt, ein Ballungsraum oder eine Region",
       "typicalDuration": "etwa 1 Tag",
       "hidingPeriodMinutes": 60,
-      "hidingZoneRadiusM": 402.336,
-      "hidingZoneLabel": "¼ Meile",
+      "hidingZoneRadiusM": 400,
+      "hidingZoneLabel": "400 m",
       "answerMinutes": 5,
       "photoMinutes": 10
     },
@@ -35,16 +35,16 @@
       "description": "Eine große Region, ein ganzes Land oder mehrere kleine Länder",
       "typicalDuration": "2–4 Tage",
       "hidingPeriodMinutes": 180,
-      "hidingZoneRadiusM": 804.672,
-      "hidingZoneLabel": "½ Meile",
+      "hidingZoneRadiusM": 800,
+      "hidingZoneLabel": "800 m",
       "answerMinutes": 5,
       "photoMinutes": 20
     }
   ],
   "round": {
     "handLimit": 6,
-    "foundWithinM": 1.524,
-    "foundLabel": "5 Fuß, und der Versteckende muss gesehen worden sein",
+    "foundWithinM": 1.5,
+    "foundLabel": "1,5 m, und der Versteckende muss gesehen worden sein",
     "roundChangeMinutes": 10,
     "scoring": "longestSingleRound",
     "scoringLabel": "Es gewinnt die längste einzelne Versteckrunde, nicht die Summe",
@@ -217,6 +217,18 @@
             "large"
           ],
           "osm": "park"
+        },
+        {
+          "label": "Flussseite",
+          "group": "Natur",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "appType": "side",
+          "osm": "river",
+          "note": "Ergänzung, nicht von lifack.ch: Bist du auf derselben Seite des nächsten Flusses wie ich?"
         },
         {
           "label": "Freizeitpark",
@@ -534,8 +546,8 @@
       "appType": "thermo",
       "options": [
         {
-          "label": "½ Meile",
-          "meters": 804.672,
+          "label": "800 m",
+          "meters": 800,
           "sizes": [
             "small",
             "medium",
@@ -543,8 +555,8 @@
           ]
         },
         {
-          "label": "3 Meilen",
-          "meters": 4828.032,
+          "label": "5 km",
+          "meters": 5000,
           "sizes": [
             "small",
             "medium",
@@ -552,16 +564,16 @@
           ]
         },
         {
-          "label": "10 Meilen",
-          "meters": 16093.44,
+          "label": "16 km",
+          "meters": 16000,
           "sizes": [
             "medium",
             "large"
           ]
         },
         {
-          "label": "50 Meilen",
-          "meters": 80467.2,
+          "label": "80 km",
+          "meters": 80000,
           "sizes": [
             "large"
           ]
@@ -579,8 +591,8 @@
       "appType": "radius",
       "options": [
         {
-          "label": "¼ Meile",
-          "meters": 402.336,
+          "label": "400 m",
+          "meters": 400,
           "sizes": [
             "small",
             "medium",
@@ -588,8 +600,8 @@
           ]
         },
         {
-          "label": "½ Meile",
-          "meters": 804.672,
+          "label": "800 m",
+          "meters": 800,
           "sizes": [
             "small",
             "medium",
@@ -597,8 +609,8 @@
           ]
         },
         {
-          "label": "1 Meile",
-          "meters": 1609.344,
+          "label": "1,6 km",
+          "meters": 1600,
           "sizes": [
             "small",
             "medium",
@@ -606,8 +618,8 @@
           ]
         },
         {
-          "label": "3 Meilen",
-          "meters": 4828.032,
+          "label": "5 km",
+          "meters": 5000,
           "sizes": [
             "small",
             "medium",
@@ -615,8 +627,8 @@
           ]
         },
         {
-          "label": "5 Meilen",
-          "meters": 8046.72,
+          "label": "8 km",
+          "meters": 8000,
           "sizes": [
             "small",
             "medium",
@@ -624,8 +636,8 @@
           ]
         },
         {
-          "label": "10 Meilen",
-          "meters": 16093.44,
+          "label": "16 km",
+          "meters": 16000,
           "sizes": [
             "small",
             "medium",
@@ -633,8 +645,8 @@
           ]
         },
         {
-          "label": "25 Meilen",
-          "meters": 40233.6,
+          "label": "40 km",
+          "meters": 40000,
           "sizes": [
             "small",
             "medium",
@@ -642,8 +654,8 @@
           ]
         },
         {
-          "label": "50 Meilen",
-          "meters": 80467.2,
+          "label": "80 km",
+          "meters": 80000,
           "sizes": [
             "small",
             "medium",
@@ -651,8 +663,8 @@
           ]
         },
         {
-          "label": "100 Meilen",
-          "meters": 160934.4,
+          "label": "160 km",
+          "meters": 160000,
           "sizes": [
             "small",
             "medium",
@@ -673,8 +685,8 @@
       "options": [
         {
           "label": "Museen",
-          "meters": 1609.344,
-          "radiusLabel": "1 Meile",
+          "meters": 1600,
+          "radiusLabel": "1,6 km",
           "sizes": [
             "medium",
             "large"
@@ -683,8 +695,8 @@
         },
         {
           "label": "Bibliotheken",
-          "meters": 1609.344,
-          "radiusLabel": "1 Meile",
+          "meters": 1600,
+          "radiusLabel": "1,6 km",
           "sizes": [
             "medium",
             "large"
@@ -693,8 +705,8 @@
         },
         {
           "label": "Kinos",
-          "meters": 1609.344,
-          "radiusLabel": "1 Meile",
+          "meters": 1600,
+          "radiusLabel": "1,6 km",
           "sizes": [
             "medium",
             "large"
@@ -703,8 +715,8 @@
         },
         {
           "label": "Krankenhäuser",
-          "meters": 1609.344,
-          "radiusLabel": "1 Meile",
+          "meters": 1600,
+          "radiusLabel": "1,6 km",
           "sizes": [
             "medium",
             "large"
@@ -713,8 +725,8 @@
         },
         {
           "label": "Metrolinien",
-          "meters": 24140.16,
-          "radiusLabel": "15 Meilen",
+          "meters": 25000,
+          "radiusLabel": "25 km",
           "sizes": [
             "large"
           ],
@@ -723,8 +735,8 @@
         },
         {
           "label": "Zoos",
-          "meters": 24140.16,
-          "radiusLabel": "15 Meilen",
+          "meters": 25000,
+          "radiusLabel": "25 km",
           "sizes": [
             "large"
           ],
@@ -732,8 +744,8 @@
         },
         {
           "label": "Aquarien",
-          "meters": 24140.16,
-          "radiusLabel": "15 Meilen",
+          "meters": 25000,
+          "radiusLabel": "25 km",
           "sizes": [
             "large"
           ],
@@ -741,8 +753,8 @@
         },
         {
           "label": "Freizeitparks",
-          "meters": 24140.16,
-          "radiusLabel": "15 Meilen",
+          "meters": 25000,
+          "radiusLabel": "25 km",
           "sizes": [
             "large"
           ],
@@ -870,7 +882,7 @@
           ]
         },
         {
-          "label": "½ Meile Straßenverlauf nachgezeichnet",
+          "label": "800 m Straßenverlauf nachgezeichnet",
           "sizes": [
             "large"
           ]

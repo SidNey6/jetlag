@@ -58,7 +58,7 @@ export async function resetRules() {
 
 /* ---------- Prüfung ---------- */
 
-export const APP_TYPES = ['radius', 'thermo', 'compare', 'nearest', 'area', 'elevation', 'sector'];
+export const APP_TYPES = ['radius', 'thermo', 'compare', 'nearest', 'area', 'elevation', 'sector', 'side'];
 export const TIE_BREAKS = ['inside', 'outside', 'warmer', 'colder', 'closer', 'further', 'yes', 'no'];
 export const PHASES = ['roundStart', 'hidingEnd', 'searchStart', 'endgame', 'found'];
 export const OUTCOMES = ['seekersLose', 'hiderLoses', 'note'];
@@ -171,8 +171,12 @@ export function validateRules(data) {
       if (o.osm != null) {
         const ids = Array.isArray(o.osm) ? o.osm : [o.osm];
         if (!ids.length || ids.some((x) => typeof x !== 'string')) fail(`${wo}: "osm" muss eine ID oder eine Liste von IDs sein.`);
+        const typ = 'appType' in o ? o.appType : q.appType;
         for (const id of ids) {
           if (!poiCategory(id) && !reference(id)) fail(`${wo}: unbekannte Quelle "${id}".`);
+          if (typ === 'side' && !(reference(id) && reference(id).directed)) {
+            fail(`${wo}: "${id}" hat keine verlässliche Richtung – Seitenfragen gehen nur mit Gewässern (river, stream).`);
+          }
         }
       }
     }

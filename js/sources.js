@@ -48,6 +48,8 @@ export const POI_CATEGORIES = [
 // from: Filter aus POI_CATEGORIES übernehmen
 // param: Platzhalter im Filter, den die Regeloption füllt (z. B. {adminLevel})
 // kind: 'elevation' – kein OSM, sondern Höhenmodell
+// directed: die Wegrichtung in OSM ist verlässlich (Gewässer fließen in Zeichenrichtung,
+//           Küsten haben Land links) – Voraussetzung für Seitenfragen ("gleiche Flussseite?")
 export const REFERENCES = [
   { id: 'motorway',       label: 'Autobahn',                  q: ['way["highway"="motorway"]'], geom: 'line', ladder: [3, 10, 30, 80, 200] },
   { id: 'trunk',          label: 'Schnellstraße',             q: ['way["highway"~"^(motorway|trunk)$"]'], geom: 'line', ladder: [3, 10, 30, 80] },
@@ -63,9 +65,9 @@ export const REFERENCES = [
   { id: 'border_admin1',  label: 'Grenze Verwaltungsebene 1', q: ['way["boundary"="administrative"]["admin_level"="4"]'], geom: 'line', ladder: [8, 30, 90, 250] },
   { id: 'border_admin2',  label: 'Grenze Verwaltungsebene 2', q: ['way["boundary"="administrative"]["admin_level"="6"]'], geom: 'line', ladder: [4, 15, 50, 150] },
   { id: 'admin_border',   label: 'Verwaltungsgrenze',         q: ['way["boundary"="administrative"]["admin_level"="{adminLevel}"]'], geom: 'line', ladder: [1, 4, 12, 40, 120], param: 'adminLevel' },
-  { id: 'coastline',      label: 'Küstenlinie',               q: ['way["natural"="coastline"]'], geom: 'line', ladder: [25, 60, 150, 350, 600] },
-  { id: 'river',          label: 'Fluss',                     q: ['way["waterway"="river"]'], geom: 'line', ladder: [2, 8, 25, 80] },
-  { id: 'stream',         label: 'Fluss/Bach',                q: ['way["waterway"~"^(river|stream|canal)$"]'], geom: 'line', ladder: [1, 4, 12, 40] },
+  { id: 'coastline',      label: 'Küstenlinie',               q: ['way["natural"="coastline"]'], geom: 'line', ladder: [25, 60, 150, 350, 600], directed: true },
+  { id: 'river',          label: 'Fluss',                     q: ['way["waterway"="river"]'], geom: 'line', ladder: [2, 8, 25, 80], directed: true },
+  { id: 'stream',         label: 'Fluss/Bach',                q: ['way["waterway"~"^(river|stream|canal)$"]'], geom: 'line', ladder: [1, 4, 12, 40], directed: true },
   { id: 'water',          label: 'Gewässer',                  q: ['nwr["natural"="water"]'], geom: 'auto', ladder: [2, 8, 25, 80] },
   { id: 'lake',           label: 'See',                       from: 'lake', geom: 'auto', ladder: [2, 8, 25, 80] },
   { id: 'mountain',       label: 'Berg',                      q: ['node["natural"="peak"]'], geom: 'point', ladder: [5, 20, 60, 180] },
@@ -99,6 +101,10 @@ export function poiCategory(id) {
 export function reference(id) {
   return REFERENCES.find((r) => r.id === id) || null;
 }
+
+// Quellen für Seitenfragen. Die Küste hat zwar eine verlässliche Richtung, aber auf
+// ihrer anderen Seite versteckt sich niemand.
+export const SIDE_REFERENCES = ['river', 'stream'].map((id) => REFERENCES.find((r) => r.id === id));
 
 // Overpass-Anweisungen einer Referenz, Platzhalter ersetzt.
 // Liefert eine Liste; der Aufrufer hängt jeweils den Suchbereich an.
