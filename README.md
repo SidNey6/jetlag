@@ -83,6 +83,40 @@ iOS wie Android. Drei Auswege:
 - Spielstand per QR-Code oder Link zwischen Handys teilen
 - „Zufallspunkt im Restgebiet" und eine Analyse, welche Radiusfrage das Gebiet am besten halbiert
 
+## Vorgebaute Regionsdaten: Bonn und Umgebung
+
+Für **Bonn und Umgebung** – von Siegburg und Hennef über Wachtberg und Oberwinter bis
+Alfter, Bornheim und Rheinbach – fragt die App nicht Overpass, sondern liest einen fertigen
+OpenStreetMap-Auszug, der mit der App ausgeliefert wird. Haltestellen, Orte, Autobahnen,
+Flüsse, Bus- und Bahnlinien, Verwaltungsgrenzen, die Gebietsliste und das Straßennetz fürs
+Endgame kommen dann in Millisekunden statt nach 5 bis 25 Sekunden, und jede einmal
+abgerufene Datei bleibt auf dem Gerät.
+
+| | Rahmen |
+|---|---|
+| Orte, Linien, Grenzen, Gebiete | 50,53–50,90° N, 6,80–7,42° O (u. a. mit Flughafen Köln/Bonn und Phantasialand) |
+| Straßennetz fürs Endgame | 50,57–50,85° N, 6,92–7,33° O |
+
+Gebaut wird der Auszug von **GitHub Actions** aus den Geofabrik-Dateien für den
+Regierungsbezirk Köln und Rheinland-Pfalz (Oberwinter und Remagen liegen schon dort):
+einmal im Monat neu, sonst aus dem Cache. Das Bau-Skript (`scripts/region/`) braucht nur
+Node – kein osmium, kein GDAL – und nutzt dieselben Filter wie die Online-Abfragen
+(`js/sources.js`, `js/osmgeo.js`); offline und online entstehen dieselben Formen.
+
+Liegt eine Frage über den Rand der Region hinaus (das nächste Objekt ist weiter weg, als
+der Auszug reicht), fragt die App wie bisher online nach. Die Landesgrenze von NRW endet im
+Auszug und kommt deshalb ebenfalls online.
+
+Lokal bauen:
+
+```bash
+curl -LO https://download.geofabrik.de/europe/germany/nordrhein-westfalen/koeln-regbez-latest.osm.pbf
+curl -LO https://download.geofabrik.de/europe/germany/rheinland-pfalz-latest.osm.pbf
+node scripts/region/build.mjs bonn --pbf koeln-regbez-latest.osm.pbf --pbf rheinland-pfalz-latest.osm.pbf
+```
+
+Weitere Regionen kommen als Eintrag in `scripts/region/regions.mjs` dazu.
+
 ## Offline spielen
 
 Unter *Mehr → Offline-Vorrat → Spielgebiet vorbereiten* lädt die App einmal alles herunter, was
@@ -92,6 +126,10 @@ die Fragen später brauchen:
 - die Geometrie jedes Bezugsobjekts für Vergleichsfragen (Autobahnen, Flüsse, Grenzen …)
 - die Orts- und Grenzliste für die Gebietsauswahl (Dörfer, Ortsteile, Gemeinden)
 - die Kartenkacheln des Gebiets
+
+Liegt das Spielgebiet in einer vorgebauten Region, holt die App stattdessen deren Dateien
+auf das Gerät – für ein Gebiet mit 8 km Radius um Bonn etwa 19 MB, ohne Straßennetz 11 MB,
+in Sekunden statt Minuten.
 
 Danach beantwortet die App jede Abfrage aus dem eigenen Bestand – im Funkloch, in der
 U-Bahn, ohne Wartezeit. Welche Quellen gebraucht werden, leitet sie aus dem aktiven
@@ -237,7 +275,7 @@ Dann `http://localhost:8099` öffnen – `localhost` gilt als sicherer Kontext, 
 funktionieren dort auch Standort und Service Worker.
 
 ```bash
-node --test test/*.test.mjs   # Geodäsie, Fragetypen, Restflächen-Schätzung, Kachelmathematik
+node --test test/*.test.mjs   # Geodäsie, Fragetypen, Endgame, Regionsdaten, Regelwerk
 ./scripts/check.sh     # Syntaxprüfung aller Module
 node scripts/make-icons.mjs  # Icons neu erzeugen
 ```
@@ -263,7 +301,11 @@ js/constraints.js   Fragetypen: Prüffunktion, Zeichengeometrie, Restflächen-St
 js/mask.js          Canvas-Overlay, das die ausgeschlossenen Flächen vereinigt
 js/map.js           Leaflet, Marker, Messwerkzeug, Punktauswahl
 js/questions.js     Dialoge zum Anlegen und Verwalten der Fragen
-js/overpass.js      OpenStreetMap-Abfragen samt Grenz-Zusammensetzung
+js/overpass.js      OpenStreetMap-Abfragen: erst Regionsdaten, dann Vorrat, dann Overpass
+js/osmgeo.js        OSM-Elemente zu Punkten, Linien, Flächen (für App und Bau-Skript)
+js/region.js        Vorgebaute Regionsdaten lesen, cachen, vorladen
+js/endgame.js       Endgame: Zone, Streckenaufzeichnung, Taschenmodus, GPX
+js/streets.js       Straßennetz, abgelaufene Stücke, kürzester Weg
 js/timers.js        Timer-Engine auf Zeitstempelbasis
 js/rounds.js        Teams, Runden, Wertung, Protokoll
 js/share.js         Export/Import über gepackte Links und QR-Codes
@@ -271,6 +313,7 @@ js/tiles.js         Offline-Kachelcache
 js/bundle.js        Ablage der vorab geladenen Gebietsdaten
 js/prefetch.js      Spielgebiet vorbereiten: sammelt alles Nötige ein
 js/state.js         Zustand, Persistenz, Undo
+scripts/region/     Regionsdaten bauen: PBF-Leser, Bau-Skript, Regionen
 ```
 
 Drei Entscheidungen, die den Rest erklären:
@@ -295,6 +338,8 @@ Drei Entscheidungen, die den Rest erklären:
   Für größere Gebiete unter *Mehr → Einstellungen → Kachelquelle* eine eigene Quelle eintragen.
 - Alle Daten bleiben auf dem Gerät (localStorage und Cache Storage). Geteilt wird nur,
   was ihr aktiv per Link oder QR weitergebt.
-- Enthaltene Fremdsoftware: [Leaflet](https://leafletjs.com) (BSD-2-Clause) und
-  [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT),
-  jeweils unter `vendor/` mit Lizenztext.
+- Regionsdaten © OpenStreetMap-Mitwirkende, Lizenz ODbL; Auszüge von
+  [Geofabrik](https://download.geofabrik.de).
+- Enthaltene Fremdsoftware: [Leaflet](https://leafletjs.com) (BSD-2-Clause),
+  [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT) und
+  Symbole von [Lucide](https://lucide.dev) (ISC), jeweils unter `vendor/` mit Lizenztext.

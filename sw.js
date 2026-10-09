@@ -2,7 +2,7 @@
 // Cache bedienen, Overpass niemals cachen (veraltete Geodaten wären schlimmer als
 // eine ehrliche Fehlermeldung).
 
-const VERSION = 'v1.6.0';
+const VERSION = 'v1.7.0';
 const APP_CACHE = `jetlag-app-${VERSION}`;
 const TILE_CACHE = 'jetlag-tiles-v1';
 
@@ -38,6 +38,8 @@ const SHELL = [
   './js/streets.js',
   './js/endgame.js',
   './js/wakelock.js',
+  './js/osmgeo.js',
+  './js/region.js',
   './rules/lifack.json',
   './js/ui/ui.js',
   './js/ui/icons.js',
@@ -114,6 +116,9 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (url.origin !== location.origin) return;
+
+  // Regionsdaten verwaltet region.js selbst (eigener Cache, versionierte Adressen)
+  if (url.pathname.includes('/data/')) return;
 
   // Seitenaufrufe: Netz zuerst, damit Updates sofort greifen; offline die Shell
   if (req.mode === 'navigate') {

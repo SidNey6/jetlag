@@ -12,6 +12,7 @@ import { fetchElevationGrid } from './elevation.js';
 import { bundlePut, setBundleMeta, areaCenter, areaRadius } from './bundle.js';
 import { tileList, downloadTiles } from './tiles.js';
 import * as Rules from './rules.js';
+import * as Region from './region.js';
 
 const PAUSE_MS = 900;
 
@@ -84,11 +85,22 @@ export function neededSources() {
   };
 }
 
-export function planSteps(area, { withTiles = true, zoomExtra = 3 } = {}) {
+// Liegt das Spielgebiet in einer Region mit vorgebauten Daten, werden statt der
+// OSM-Abfragen nur deren Dateien in den Offline-Speicher geholt.
+export function regionFor(area) {
+  const b = areaBounds(area);
+  return b ? Region.regionForBounds(expand(b, 2000)) : null;
+}
+
+export function planSteps(area, { withTiles = true, zoomExtra = 3, withStreets = true } = {}) {
   const { pois, refs, adminLevels, elevation } = neededSources();
+  const region = regionFor(area);
+  const regionFiles = region ? Region.filesFor(region, expand(areaBounds(area), 2000), { streets: withStreets }) : [];
+  const osmSchritte = region ? 1 : pois.length + refs.length + adminLevels.length + 1;
   return {
-    pois, refs, adminLevels, elevation,
-    schritte: pois.length + refs.length + adminLevels.length + (elevation ? 1 : 0) + 1 + (withTiles ? 1 : 0),
+    pois, refs, adminLevels, elevation, region, regionFiles,
+    regionBytes: region ? Region.bytesFor(region, regionFiles) : 0,
+    schritte: osmSchritte + (elevation ? 1 : 0) + (withTiles ? 1 : 0),
     kacheln: withTiles ? estimateTiles(area, zoomExtra) : 0,
   };
 }
@@ -110,22 +122,44 @@ export function zoomForArea(area) {
   return 10;
 }
 
-export async function prepareArea(area, { onProgress = () => {}, signal, withTiles = true, zoomExtra = 3 } = {}) {
+export async function prepareArea(area, { onProgress = () => {}, signal, withTiles = true, zoomExtra = 3, withStreets = true } = {}) {
   const center = areaCenter(area);
   const bounds = areaBounds(area);
   if (!center || !bounds) throw new Error('Kein Spielgebiet gesetzt');
 
-  const { pois, refs, adminLevels, elevation } = neededSources();
+  const region = regionFor(area);
+  const { pois, refs, adminLevels, elevation } = region
+    ? { ...neededSources(), pois: [], refs: [], adminLevels: [] }
+    : neededSources();
   // Was viel weiter weg liegt als das Spielgebiet groß ist, wird nicht vorgeladen –
   // dafür bliebe es online abrufbar. Sonst zöge eine ferne Küste halbe Länder herunter.
   const reichweiteKm = Math.round(areaRadius(area) / 1000 * 4 + 80);
-  const gesamt = pois.length + refs.length + adminLevels.length + (elevation ? 1 : 0) + 1 + (withTiles ? 1 : 0);
+  const gesamt = (region ? 1 : pois.length + refs.length + adminLevels.length + 1) + (elevation ? 1 : 0) + (withTiles ? 1 : 0);
   let erledigt = 0;
   const fehler = [];
-  const zaehler = { pois: 0, refs: 0, orte: 0, gebiete: 0, hoehe: 0, kacheln: 0 };
+  const zaehler = { pois: 0, refs: 0, orte: 0, gebiete: 0, hoehe: 0, kacheln: 0, region: 0 };
 
   const schritt = (text) => onProgress({ erledigt, gesamt, text });
   const weiter = () => { erledigt++; };
+
+  // Vorgebaute Regionsdaten: ein paar Megabyte statischer Dateien statt dutzender
+  // Overpass-Abfragen
+  if (region) {
+    const paths = Region.filesFor(region, expand(bounds, 2000), { streets: withStreets });
+    schritt(`Regionsdaten ${region.name}`);
+    try {
+      const res = await Region.warm(region, paths, {
+        signal,
+        onProgress: (d, t) => onProgress({ erledigt, gesamt, text: `Regionsdaten ${d} / ${t}` }),
+      });
+      zaehler.region = res.done - res.failed;
+      if (res.failed) fehler.push(`Regionsdaten: ${res.failed} Dateien nicht geladen`);
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      fehler.push(`Regionsdaten: ${e.message || e}`);
+    }
+    weiter();
+  }
 
   // Orte je Kategorie – im Rechteck, damit das ganze Gebiet abgedeckt ist
   const box = expand(bounds, 2000);
@@ -191,7 +225,7 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
   }
 
   // Orts- und Gebietsliste für die Gebietsauswahl
-  if (!signal?.aborted) {
+  if (!region && !signal?.aborted) {
     schritt('Orte und Grenzen');
     try {
       const areas = await areasInBox(box);
@@ -221,6 +255,7 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
   const meta = {
     area,
     at: Date.now(),
+    region: region ? { id: region.id, name: region.name, version: region.version } : null,
     regelwerk: Rules.getRules()?.name || null,
     kategorien: pois,
     bezugsobjekte: refs.map((r) => bundleKey(r.id, r.params)),

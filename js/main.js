@@ -14,10 +14,11 @@ import * as Zone from './zone.js';
 import * as Endgame from './endgame.js';
 import { findStopsNear } from './overpass.js';
 import { initBundle } from './bundle.js';
+import { initRegions } from './region.js';
 import { el, clear, openSheet, promptSheet, toast, icon, row } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.6.0';
+window.__JL_VERSION__ = 'v1.7.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -250,8 +251,9 @@ function boot() {
 
   Loc.setAccuracyMode(getState().settings.gpsAccuracy || 'high');
 
-  // Offline-Vorrat kennen, bevor die erste Abfrage losläuft
+  // Offline-Vorrat und vorgebaute Regionen kennen, bevor die erste Abfrage losläuft
   initBundle().catch(() => {});
+  initRegions().catch(() => {});
   Endgame.initEndgame();
 
   // Regelwerk nachladen; die Oberfläche läuft auch an, bevor es da ist

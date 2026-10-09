@@ -5,11 +5,16 @@
 import { getState } from './state.js';
 import { areaBounds } from './constraints.js';
 import { bundleGet, bundleCovers } from './bundle.js';
-import { distance, formatDistance, simplify, destination, circle, distanceToFeatures, pointInPolygon } from './geo.js';
+import * as Region from './region.js';
+import { distance, formatDistance, destination, circle, distanceToFeatures, pointInPolygon } from './geo.js';
 import { el, clear, openSheet, toast } from './ui/ui.js';
 import { POI_CATEGORIES, REFERENCES, poiCategory, reference, referenceStatements, poiStatements } from './sources.js';
+import {
+  toPoints, stopKind, STOP_CATEGORIES, STOP_LABEL, STREET_FILTER, featuresFrom, routeFeaturesFrom, mergeLines, fitBudget,
+  stitchOuterRing, PLACE_RE, ADMIN_RE, GROUPS, areaCandidate, dedupeAreas, slimRing,
+} from './osmgeo.js';
 
-export { POI_CATEGORIES, REFERENCES, reference };
+export { POI_CATEGORIES, REFERENCES, reference, STOP_CATEGORIES, GROUPS };
 
 // Reihenfolge = Vorzug. overpass.osm.jp fiel raus: ungültiges Zertifikat.
 const ENDPOINTS = [
@@ -85,30 +90,6 @@ function query(ql) {
   });
 }
 
-function toPoints(json, { namedOnly = true, kindOf = null } = {}) {
-  const out = [];
-  for (const e of json.elements || []) {
-    const lat = e.lat ?? e.center?.lat;
-    const lng = e.lon ?? e.center?.lon;
-    if (lat == null || lng == null) continue;
-    const name = e.tags?.name || null;
-    if (namedOnly && !name) continue;
-    const p = { id: `${e.type[0]}${e.id}`, lat, lng, name: name || 'ohne Namen' };
-    if (kindOf) p.kind = kindOf(e.tags || {});
-    out.push(p);
-  }
-  // Gleichnamige Einträge zusammenfassen: OSM führt dieselbe Station oft mehrfach
-  // (Relation, Node, zwei Bahnsteige). Zwei Einträge „Alexanderplatz" in einer
-  // Auswahlliste wären für eine Frage nach dem nächsten Ort nicht beantwortbar.
-  const seen = [];
-  return out.filter((p) => {
-    const dup = seen.find((q) => q.name === p.name && distance(p, q) < 400);
-    if (dup) return false;
-    seen.push(p);
-    return true;
-  });
-}
-
 function aroundUnion(statements, center, radiusM) {
   const around = `(around:${Math.round(radiusM)},${center.lat.toFixed(6)},${center.lng.toFixed(6)})`;
   return '(' + statements.map((st) => `${st}${around};`).join('') + ')';
@@ -120,11 +101,14 @@ function boxUnion(statements, bounds) {
 }
 
 export async function findPois(center, categoryId, radiusM, namedOnly = true) {
+  await Region.initRegions();
   const cat = poiCategory(categoryId);
   if (!cat) throw new Error(`Unbekannte Kategorie "${categoryId}"`);
 
-  // Vorab geladene Daten kosten kein Netz und keine Wartezeit
-  const vorrat = bundleCovers(center) ? await bundleGet(`pois/${categoryId}`) : null;
+  // Vorgebaute Regionsdaten und vorab geladener Vorrat kosten kein Netz und keine Wartezeit
+  const region = Region.regionForCircle(center, radiusM);
+  const vorrat = (region ? await Region.regionTry(region, `pois/${categoryId}`) : null)
+    || (bundleCovers(center) ? await bundleGet(`pois/${categoryId}`) : null);
   if (vorrat) {
     return vorrat
       .map((p) => ({ ...p, distance: distance(center, p) }))
@@ -143,22 +127,15 @@ export async function findPois(center, categoryId, radiusM, namedOnly = true) {
 
 // Haltestellen aller Art um einen angetippten Punkt – eine Abfrage statt drei, damit
 // das lange Drücken auf der Karte nicht in Overpass' Drosselung läuft.
-export const STOP_CATEGORIES = ['station', 'tram_subway', 'bus'];
-
-function stopKind(t) {
-  if (t.railway === 'station' && !/^(subway|light_rail)$/.test(t.station || '')) return 'station';
-  if (t.highway === 'bus_stop') return 'bus';
-  return 'tram_subway';
-}
-
 export async function findStopsNear(center, radiusM) {
-  const label = { station: 'Bahnhof', tram_subway: 'Straßen-/U-Bahn', bus: 'Bushaltestelle' };
+  await Region.initRegions();
+  const label = STOP_LABEL;
   let found = [];
-  if (bundleCovers(center)) {
-    for (const id of STOP_CATEGORIES) {
-      const vorrat = await bundleGet(`pois/${id}`);
-      if (vorrat) found.push(...vorrat.map((p) => ({ ...p, kind: id })));
-    }
+  const region = Region.regionForCircle(center, radiusM);
+  for (const id of STOP_CATEGORIES) {
+    const vorrat = (region ? await Region.regionTry(region, `pois/${id}`) : null)
+      || (bundleCovers(center) ? await bundleGet(`pois/${id}`) : null);
+    if (vorrat) found.push(...vorrat.map((p) => ({ ...p, kind: id })));
   }
   if (!found.length) {
     const statements = STOP_CATEGORIES.flatMap((id) => poiStatements(poiCategory(id)));
@@ -166,22 +143,28 @@ export async function findStopsNear(center, radiusM) {
       + `${aroundUnion(statements, center, radiusM)};out center tags;`;
     found = toPoints(await query(ql), { kindOf: stopKind });
   }
-  return found
+  const nah = found
     .map((p) => ({ ...p, distance: distance(center, p), kindLabel: p.kind ? label[p.kind] : null }))
     .filter((p) => p.distance <= radiusM)
     .sort((a, b) => a.distance - b.distance);
+  // Dieselbe Station steht oft als Bahnhof und als Bahnsteig der Stadtbahn darin
+  const out = [];
+  for (const p of nah) {
+    if (!out.some((q) => q.name === p.name && distance(p, q) < 150)) out.push(p);
+  }
+  return out;
 }
 
 // Begehbare Wege im Umkreis. Gehwege neben der Fahrbahn, Querungen, Einfahrten und
-// Parkplatzgassen bleiben draußen: sie würden dieselbe Straße doppelt zählen oder
-// Hunderte Mini-Stücke erzeugen, die niemand "abgeht".
-const WALKABLE = '^(primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|service|track|footway|path|cycleway|steps|bridleway|primary_link|secondary_link|tertiary_link|road)$';
-
+// Parkplatzgassen bleiben draußen (Filter in osmgeo.js).
 export async function loadStreets(center, radiusM) {
-  const filter = `way["highway"~"${WALKABLE}"]["area"!="yes"]["access"!~"^(private|no)$"]`
-    + '["footway"!~"^(sidewalk|crossing)$"]["service"!~"^(driveway|parking_aisle|drive-through)$"]["indoor"!="yes"]';
+  await Region.initRegions();
+  const region = Region.regionAt(center);
+  if (Region.streetsCover(region, center, radiusM)) {
+    try { return await Region.regionStreets(region, center, radiusM); } catch (e) { /* weiter mit Overpass */ }
+  }
   const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
-    + `${filter}(around:${Math.round(radiusM)},${center.lat.toFixed(6)},${center.lng.toFixed(6)});out geom;`;
+    + `${STREET_FILTER}(around:${Math.round(radiusM)},${center.lat.toFixed(6)},${center.lng.toFixed(6)});out geom;`;
   const json = await query(ql);
   return (json.elements || [])
     .filter((e) => e.type === 'way' && Array.isArray(e.geometry) && e.geometry.length > 1)
@@ -201,61 +184,6 @@ export async function loadStreets(center, radiusM) {
 // nächstgelegenen Punkt des Objekts gerechnet. Die Registry steht in sources.js.
 const KM = 1000;
 
-const ROUTE_LABEL = { bus: 'Bus', tram: 'Tram', subway: 'U-Bahn', light_rail: 'Stadtbahn', train: 'Zug' };
-
-// Identität eines Objekts: gleiche Linie = gleicher Schlüssel, auch wenn OSM sie in
-// Hin- und Rückrichtung oder in viele Teilstücke zerlegt. Wichtig für Fragen der Art
-// "ist deine nächste Linie dieselbe wie meine?".
-function identityOf(e) {
-  const t = e.tags || {};
-  if (t.route) {
-    const nr = t.ref || t.name || `#${e.id}`;
-    return { key: `${t.route}:${nr}`, name: t.ref ? `${ROUTE_LABEL[t.route] || t.route} ${t.ref}` : (t.name || nr) };
-  }
-  const name = t.name || t.ref || t.int_ref || null;
-  return { key: name ? `n:${name}` : `${e.type}:${e.id}`, name };
-}
-
-// Ein OSM-Element in Features zerlegen. Relationen vom Typ Linie ('lines') liefern
-// alle Mitgliedswege, Flächen werden zu einem Ring zusammengesetzt.
-function elementToFeatures(e, geomHint) {
-  if (e.type === 'node') return [{ type: 'point', points: [{ lat: e.lat, lng: e.lon }] }];
-  if (e.type === 'way' && Array.isArray(e.geometry)) {
-    const pts = e.geometry.map((g) => ({ lat: g.lat, lng: g.lon }));
-    if (pts.length < 2) return [];
-    const first = pts[0], last = pts[pts.length - 1];
-    const closed = Math.abs(first.lat - last.lat) < 1e-9 && Math.abs(first.lng - last.lng) < 1e-9;
-    const linear = geomHint === 'line' || geomHint === 'lines';
-    const type = linear ? 'line' : (closed ? 'polygon' : 'line');
-    return [{ type, points: closed && type === 'polygon' ? pts.slice(0, -1) : pts }];
-  }
-  if (e.type === 'relation' && Array.isArray(e.members)) {
-    const ways = e.members.filter((m) => m.type === 'way' && Array.isArray(m.geometry) && m.geometry.length > 1);
-    if (geomHint === 'lines' || geomHint === 'line') {
-      return ways.map((m) => ({ type: 'line', points: m.geometry.map((g) => ({ lat: g.lat, lng: g.lon })) }));
-    }
-    const ring = stitchOuterRing(e.members);
-    if (ring && ring.length >= 3) return [{ type: 'polygon', points: ring }];
-    return ways.slice(0, 1).map((m) => ({ type: 'line', points: m.geometry.map((g) => ({ lat: g.lat, lng: g.lon })) }));
-  }
-  return [];
-}
-
-function featuresFrom(json, spec, center) {
-  const out = [];
-  for (const e of json.elements || []) {
-    const id = identityOf(e);
-    for (const f of elementToFeatures(e, spec.geom)) {
-      if (!f.points.length) continue;
-      f.name = id.name;
-      f.key = id.key;
-      f.distance = distanceToFeatures(center, [f]);
-      out.push(f);
-    }
-  }
-  return out.sort((a, b) => a.distance - b.distance);
-}
-
 function aroundQuery(statements, center, km, timeout) {
   return `[out:json][timeout:${timeout}];${aroundUnion(statements, center, km * KM)};out geom 2000;`;
 }
@@ -269,79 +197,6 @@ function routeQuery(statements, center, km, coverM, timeout) {
     + `(${statements.map((st) => `${st}${around(km * KM)};`).join('')})->.routes;`
     + '.routes out body;'
     + `way(r.routes)${around(coverM)};out geom;`;
-}
-
-// Wegstücke ihren Linien zuordnen. Teilen sich zwei Linien ein Gleis, gehört das
-// Stück beiden – im Grenzfall sind sie dann eben gleich nah.
-function routeFeaturesFrom(json, center) {
-  const ways = new Map();
-  const routes = [];
-  for (const e of json.elements || []) {
-    if (e.type === 'way' && Array.isArray(e.geometry)) ways.set(e.id, e);
-    else if (e.type === 'relation') routes.push(e);
-  }
-  const out = [];
-  for (const rel of routes) {
-    const id = identityOf(rel);
-    for (const m of rel.members || []) {
-      if (m.type !== 'way') continue;
-      const w = ways.get(m.ref);
-      if (!w || w.geometry.length < 2) continue;
-      const f = { type: 'line', points: w.geometry.map((g) => ({ lat: g.lat, lng: g.lon })), name: id.name, key: id.key };
-      f.distance = distanceToFeatures(center, [f]);
-      out.push(f);
-    }
-  }
-  return out.sort((a, b) => a.distance - b.distance);
-}
-
-// OSM zerlegt lange Wege an jeder Kreuzung. Für Abstandsrechnung und Zeichnung sind
-// zusammenhängende Linien besser: weniger Zustand, weniger Zeichenoperationen je Bild.
-// Zusammengefügt wird nur, was zum selben Objekt gehört – sonst verschmölze die A 565
-// am Autobahnkreuz mit der A 59, und "dieselbe Autobahn?" wäre nicht mehr beantwortbar.
-// directed: nur Ende an Anfang hängen, nie ein Stück umdrehen – sonst ginge die
-// Fließrichtung verloren, an der die Flussseite hängt.
-function mergeLines(feats, directed = false) {
-  const lines = feats.filter((f) => f.type === 'line');
-  const rest = feats.filter((f) => f.type !== 'line');
-  const near = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
-  const pool = lines.map((f) => ({ points: f.points.slice(), name: f.name, key: f.key }));
-  const out = [];
-
-  while (pool.length) {
-    const cur = pool.shift();
-    let extended = true;
-    while (extended) {
-      extended = false;
-      for (let i = 0; i < pool.length; i++) {
-        if (pool[i].key !== cur.key) continue;
-        const A = cur.points, B = pool[i].points;
-        if (near(A[A.length - 1], B[0])) cur.points = A.concat(B.slice(1));
-        else if (near(A[0], B[B.length - 1])) cur.points = B.slice(0, -1).concat(A);
-        else if (directed) continue;
-        else if (near(A[A.length - 1], B[B.length - 1])) cur.points = A.concat(B.slice().reverse().slice(1));
-        else if (near(A[0], B[0])) cur.points = B.slice().reverse().slice(0, -1).concat(A);
-        else continue;
-        pool.splice(i, 1);
-        extended = true;
-        break;
-      }
-    }
-    out.push({ type: 'line', name: cur.name, key: cur.key, points: cur.points });
-  }
-  return [...out, ...rest];
-}
-
-// Stützpunkte begrenzen: lieber gröber als einen Spielstand mit 50.000 Koordinaten.
-function fitBudget(features, budget = 6000) {
-  let eps = 0.0003;
-  let out = features;
-  const count = (fs) => fs.reduce((n, f) => n + f.points.length, 0);
-  while (count(out) > budget && eps < 0.02) {
-    out = features.map((f) => ({ ...f, points: f.points.length > 4 ? simplify(f.points, eps) : f.points }));
-    eps *= 2;
-  }
-  return out.map((f) => ({ ...f, points: f.points.length > 8 ? simplify(f.points, 0.0003) : f.points }));
 }
 
 export function bundleKey(refId, params) {
@@ -361,6 +216,11 @@ async function loadReference(center, refId, { area = null, maxKm = null, params 
   if (!statements.length) throw new Error(`Für "${spec.label}" ist keine Abfrage hinterlegt`);
   const timeout = getState().settings.overpassTimeout || 25;
 
+  // Vorgebaute Regionsdaten: reicht die Region weit genug, ist das die Antwort. Sonst
+  // dient sie als Rückfall, falls Overpass nicht erreichbar ist.
+  const ausRegion = await referenceFromRegion(center, spec, bundleKey(refId, params), area);
+  if (ausRegion && ausRegion.complete) return ausRegion.result;
+
   const vorrat = bundleCovers(center) ? await bundleGet(bundleKey(refId, params)) : null;
   if (vorrat && vorrat.length) {
     return {
@@ -372,6 +232,36 @@ async function loadReference(center, refId, { area = null, maxKm = null, params 
     };
   }
 
+  try {
+    return await referenceOnline(center, spec, statements, { area, maxKm, timeout });
+  } catch (e) {
+    if (ausRegion) return ausRegion.result;
+    throw e;
+  }
+}
+
+async function referenceFromRegion(center, spec, key, area) {
+  await Region.initRegions();
+  const region = Region.regionAt(center);
+  if (!region || !Region.has(region, key)) return null;
+  const all = await Region.regionTry(region, key);
+  if (!all || !all.length) return null;
+  const mit = all.map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
+    .sort((a, b) => a.distance - b.distance);
+  // Dieselbe Abdeckung wie bei der Online-Suche: ganzes Spielgebiet plus der Abstand
+  // zum nächsten Objekt. Liegt die vollständig in der Region, kann nichts fehlen.
+  const reichweite = (radiusToCover(center, area) + mit[0].distance) * 1.1;
+  const kept = mit.filter((f) => f.distance <= reichweite);
+  const slim = fitBudget(kept).map((f) => ({
+    type: f.type, name: f.name, key: f.key, distance: f.distance, points: f.points,
+  }));
+  return {
+    complete: Region.circleInside(region.bounds, center, reichweite),
+    result: { spec, feats: slim, coveredKm: Math.ceil(reichweite / KM), offline: true, region: region.name },
+  };
+}
+
+async function referenceOnline(center, spec, statements, { area, maxKm, timeout }) {
   // Bus- und Bahnlinien sind lokale Bezüge: "dieselbe nächste Tram?" ist in einem
   // Stadtspiel sinnlos, wenn die nächste Tram 60 km entfernt fährt – und genau diese
   // Stufen ziehen ganze Verkehrsnetze. Deshalb enden Linien-Suchen nahe am Gebiet.
@@ -466,62 +356,6 @@ function radiusToCover(center, area) {
 // Nicht jedes Dorf ist eine Verwaltungsgrenze. In OSM stecken kleine Orte je nach
 // Gegend als boundary=administrative (Ebene 9–11), als place-Fläche oder nur als
 // place-Knoten ohne Umriss. Gesucht wird deshalb über beide Schienen.
-const PLACE_RE = '^(city|borough|town|suburb|village|quarter|neighbourhood|hamlet|isolated_dwelling)$';
-const ADMIN_RE = '^(4|5|6|7|8|9|10|11|12)$';
-
-const ADMIN_LABEL = {
-  4: 'Bundesland', 5: 'Regierungsbezirk', 6: 'Kreis', 7: 'Amt / Verbandsgemeinde',
-  8: 'Gemeinde / Stadt', 9: 'Stadtbezirk', 10: 'Ortsteil', 11: 'Stadtviertel', 12: 'Quartier',
-};
-const PLACE_LABEL = {
-  city: 'Großstadt', borough: 'Stadtbezirk', town: 'Stadt', suburb: 'Stadtteil', village: 'Dorf',
-  quarter: 'Quartier', neighbourhood: 'Nachbarschaft', hamlet: 'Weiler',
-  isolated_dwelling: 'Einzellage',
-};
-// Je höher der Rang, desto kleiner das Gebiet – danach wird sortiert, damit Dörfer
-// und Ortsteile oben stehen und nicht hinter Bundesland und Kreis verschwinden.
-const PLACE_RANK = {
-  city: 8, borough: 9, town: 9, suburb: 10, village: 10,
-  quarter: 11, neighbourhood: 12, hamlet: 11, isolated_dwelling: 12,
-};
-
-const SETTLEMENT = new Set(['city', 'borough', 'town', 'suburb', 'village', 'quarter', 'neighbourhood', 'hamlet', 'isolated_dwelling']);
-
-export const GROUPS = [
-  null,
-  'Orte, Ortsteile und Viertel',
-  'Ganze Gemeinden und Städte',
-  'Nur als Punkt erfasst – wird zum Kreis',
-  'Größere Gebiete',
-];
-
-// Sortiert wird danach, was für eine Spielfrage taugt, nicht danach, was klein ist:
-// ein Dorf mit Umriss schlägt einen bloßen Ortspunkt, und Kreis oder Bundesland
-// gehören ans Ende statt dazwischen.
-export function areaTier(c) {
-  const lvl = c.tags.admin_level ? parseInt(c.tags.admin_level, 10) : null;
-  const settlement = SETTLEMENT.has(c.tags.place);
-  const wide = c.tags.place === 'city' || c.tags.place === 'town';
-  const small = (lvl != null && lvl >= 9) || (settlement && !wide);
-  if (c.hasGeometry && small) return 1;
-  if (c.hasGeometry && (lvl === 8 || wide)) return 2;
-  if (!c.hasGeometry && settlement) return 3;
-  return 4;
-}
-
-export function areaRank(tags = {}) {
-  if (tags.admin_level) return parseInt(tags.admin_level, 10) || 13;
-  return PLACE_RANK[tags.place] ?? 13;
-}
-
-export function areaKindLabel(tags = {}) {
-  const parts = [];
-  if (PLACE_LABEL[tags.place]) parts.push(PLACE_LABEL[tags.place]);
-  if (ADMIN_LABEL[tags.admin_level]) parts.push(ADMIN_LABEL[tags.admin_level]);
-  else if (tags.admin_level) parts.push(`Ebene ${tags.admin_level}`);
-  return parts.join(' · ') || 'Gebiet';
-}
-
 function bboxAround(center, radius) {
   const n = destination(center, 0, radius), e = destination(center, 90, radius);
   const sth = destination(center, 180, radius), w = destination(center, 270, radius);
@@ -531,7 +365,10 @@ function bboxAround(center, radius) {
 // Alle Gebiete im Umkreis – nicht nur die, in denen man gerade steht.
 // Genau daran scheiterte das Auswählen einzelner Dörfer vorher.
 export async function findAreas(center, radius) {
-  const vorrat = bundleCovers(center) ? await bundleGet('areas') : null;
+  await Region.initRegions();
+  const region = Region.regionForCircle(center, radius);
+  const vorrat = (region ? await Region.regionTry(region, 'areas') : null)
+    || (bundleCovers(center) ? await bundleGet('areas') : null);
   if (vorrat) {
     return vorrat
       .map((c) => ({ ...c, distance: distance(center, c) }))
@@ -550,36 +387,24 @@ export async function findAreas(center, radius) {
     + ');out tags center;';
   const json = await query(ql);
 
-  const list = [];
-  for (const e of json.elements || []) {
-    const tags = e.tags || {};
-    if (!tags.name) continue;
-    const lat = e.lat ?? e.center?.lat;
-    const lng = e.lon ?? e.center?.lon;
-    if (lat == null || lng == null) continue;
-    const c = {
-      key: `${e.type}/${e.id}`, type: e.type, id: e.id, tags,
-      name: tags.name, kind: areaKindLabel(tags), rank: areaRank(tags),
-      lat, lng, distance: distance(center, { lat, lng }),
-      hasGeometry: e.type !== 'node',
-    };
-    c.tier = areaTier(c);
-    list.push(c);
-  }
-
-  // Derselbe Ort taucht oft doppelt auf (Grenzrelation + place-Knoten).
-  // Der Eintrag mit Umriss gewinnt, sonst wäre nur der Kreis-Notbehelf übrig.
-  const preference = { relation: 3, way: 2, node: 1 };
-  const kept = [];
-  for (const c of list.sort((a, b2) => preference[b2.type] - preference[a.type])) {
-    const dup = kept.find((k) => k.name === c.name && Math.abs(k.rank - c.rank) <= 1 && distance(k, c) < 3000);
-    if (!dup) kept.push(c);
-  }
-  return kept.sort((a, b2) => (a.tier - b2.tier) || (a.distance - b2.distance)).slice(0, 120);
+  const list = (json.elements || []).map(areaCandidate).filter(Boolean)
+    .map((c) => ({ ...c, distance: distance(center, c) }));
+  return dedupeAreas(list).sort((a, b2) => (a.tier - b2.tier) || (a.distance - b2.distance)).slice(0, 120);
 }
 
 // Welche Gebiete enthalten den Punkt? Nur zum Markieren in der Liste.
 export async function areaKeysAt(point) {
+  await Region.initRegions();
+  // Mit Regionsdaten: in welchen Verwaltungsgebieten liegt der Punkt?
+  const region = Region.regionAt(point);
+  if (region) {
+    const keys = new Set();
+    for (const path of Object.keys(region.files).filter((p) => p.startsWith('admin/'))) {
+      const liste = await Region.regionTry(region, path);
+      for (const a of liste || []) if (pointInPolygon(point, a.ring)) keys.add(`relation/${a.id}`);
+    }
+    if (keys.size) return keys;
+  }
   const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
     + `is_in(${point.lat.toFixed(6)},${point.lng.toFixed(6)})->.a;`
     + '(relation(pivot.a);way(pivot.a););out ids;';
@@ -588,7 +413,11 @@ export async function areaKeysAt(point) {
 }
 
 export async function areaGeometry(cand) {
+  await Region.initRegions();
   if (cand.type === 'node') return null;
+  const region = Region.regionAt(cand);
+  const ausRegion = region ? await Region.regionTry(region, `geom/${cand.type}-${cand.id}`) : null;
+  if (ausRegion) return ausRegion;
   const ql = `[out:json][timeout:60];${cand.type}(${cand.id});out geom;`;
   const json = await query(ql);
   const el0 = (json.elements || []).find((e) => e.type === cand.type);
@@ -599,12 +428,7 @@ export async function areaGeometry(cand) {
     : stitchOuterRing(el0.members || []);
   if (!ring || ring.length < 3) throw new Error('Umriss ließ sich nicht zusammensetzen');
 
-  // Fein genug für ein Dorf, grob genug für ein Bundesland: erst scharf vereinfachen,
-  // dann nur so weit nachlassen, bis die Punktzahl handhabbar ist.
-  let eps = 0.00005;
-  let out = simplify(ring, eps);
-  while (out.length > 1200 && eps < 0.01) { eps *= 2; out = simplify(ring, eps); }
-  return out;
+  return slimRing(ring);
 }
 
 // Gebiet einer bestimmten Verwaltungsebene am Standort – für Regeloptionen wie
@@ -612,11 +436,17 @@ export async function areaGeometry(cand) {
 // Welche Ebene was bedeutet, ist regional verschieden (Bonn: 8 Stadt, 9 Stadtbezirk,
 // 10 Ortsteil) und steht deshalb im Regelwerk, nicht hier.
 export async function adminAreaAt(point, level) {
-  const vorrat = bundleCovers(point) ? await bundleGet(`admin/${level}`) : null;
-  if (vorrat) {
-    const hit = vorrat.find((a) => pointInPolygon(point, a.ring));
+  await Region.initRegions();
+  const region = Region.regionAt(point);
+  const ausRegion = region ? await Region.regionTry(region, `admin/${level}`) : null;
+  for (const vorrat of [ausRegion, bundleCovers(point) ? await bundleGet(`admin/${level}`) : null]) {
+    const hit = (vorrat || []).find((a) => pointInPolygon(point, a.ring));
     if (hit) return { ...hit, offline: true };
   }
+  // Kreise, Gemeinden und Ortsteile sind in den Regionsdaten vollständig – fehlt dort
+  // eins, gibt es keins (Bonn hat z. B. keine Ebene 8). Landes- und Bezirksgrenzen
+  // reichen über den Auszug hinaus und werden deshalb online nachgefragt.
+  if (ausRegion && level >= 6) throw new Error(`Hier gibt es kein Gebiet der Verwaltungsebene ${level}`);
   const ql = `[out:json][timeout:${getState().settings.overpassTimeout || 25}];`
     + `is_in(${point.lat.toFixed(6)},${point.lng.toFixed(6)})->.a;`
     + `relation(pivot.a)["boundary"="administrative"]["admin_level"="${level}"];out ids tags;`;
@@ -636,51 +466,9 @@ export async function adminAreasInBox(bounds, level) {
   for (const e of json.elements || []) {
     const ring = stitchOuterRing(e.members || []);
     if (!ring || ring.length < 3) continue;
-    let eps = 0.00005;
-    let slim = simplify(ring, eps);
-    while (slim.length > 1200 && eps < 0.01) { eps *= 2; slim = simplify(ring, eps); }
-    out.push({ id: e.id, name: e.tags?.name || `Ebene ${level}`, level, ring: slim });
+    out.push({ id: e.id, name: e.tags?.name || `Ebene ${level}`, level, ring: slimRing(ring) });
   }
   return out;
-}
-
-// Die Grenzwege einer Relation kommen unsortiert und teils verdreht.
-// Hier werden sie an den Endpunkten aneinandergehängt; von mehreren geschlossenen
-// Ringen (Exklaven) gewinnt der flächenmäßig größte.
-function stitchOuterRing(members) {
-  const segs = members
-    .filter((m) => m.type === 'way' && Array.isArray(m.geometry) && (m.role === 'outer' || !m.role))
-    .map((m) => m.geometry.map((g) => ({ lat: g.lat, lng: g.lon })));
-  if (!segs.length) return null;
-
-  const rings = [];
-  const pool = segs.slice();
-  const near = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
-
-  while (pool.length) {
-    let ring = pool.shift().slice();
-    let extended = true;
-    while (extended) {
-      extended = false;
-      for (let i = 0; i < pool.length; i++) {
-        const seg = pool[i];
-        const head = ring[0], tail = ring[ring.length - 1];
-        if (near(tail, seg[0])) { ring = ring.concat(seg.slice(1)); pool.splice(i, 1); extended = true; break; }
-        if (near(tail, seg[seg.length - 1])) { ring = ring.concat(seg.slice().reverse().slice(1)); pool.splice(i, 1); extended = true; break; }
-        if (near(head, seg[seg.length - 1])) { ring = seg.slice(0, -1).concat(ring); pool.splice(i, 1); extended = true; break; }
-        if (near(head, seg[0])) { ring = seg.slice().reverse().slice(0, -1).concat(ring); pool.splice(i, 1); extended = true; break; }
-      }
-    }
-    rings.push(ring);
-  }
-  rings.sort((a, b) => bboxArea(b) - bboxArea(a));
-  return rings[0];
-}
-
-function bboxArea(ring) {
-  let s = 90, n = -90, w = 180, e = -180;
-  for (const p of ring) { s = Math.min(s, p.lat); n = Math.max(n, p.lat); w = Math.min(w, p.lng); e = Math.max(e, p.lng); }
-  return (n - s) * (e - w);
 }
 
 // Für das Vorabladen: alles in einem Rechteck statt im Umkreis eines Punktes.
@@ -702,22 +490,7 @@ export async function areasInBox(bounds) {
     + `node["place"~"${PLACE_RE}"]${box};`
     + ');out tags center;';
   const json = await query(ql);
-  const list = [];
-  for (const e of json.elements || []) {
-    const tags = e.tags || {};
-    if (!tags.name) continue;
-    const lat = e.lat ?? e.center?.lat;
-    const lng = e.lon ?? e.center?.lon;
-    if (lat == null || lng == null) continue;
-    const c = {
-      key: `${e.type}/${e.id}`, type: e.type, id: e.id, tags,
-      name: tags.name, kind: areaKindLabel(tags), rank: areaRank(tags),
-      lat, lng, hasGeometry: e.type !== 'node',
-    };
-    c.tier = areaTier(c);
-    list.push(c);
-  }
-  return list;
+  return (json.elements || []).map(areaCandidate).filter(Boolean);
 }
 
 /* ---------- Dialoge ---------- */

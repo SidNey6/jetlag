@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Regionsdaten einmal im Monat aus frischen OpenStreetMap-Auszügen bauen
+    - cron: '17 4 3 * *'
 
 permissions:
   contents: read
@@ -27,14 +30,68 @@ jobs:
       - name: Tests
         run: node --test test/*.test.mjs
 
+  # Vorgebaute Regionsdaten (data/). Gebaut wird nur, wenn sich das Bau-Skript geändert
+  # hat oder ein neuer Monat begonnen hat – sonst kommt der Stand aus dem Cache und
+  # Geofabrik wird nicht bei jedem Push belastet.
+  region:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Cache-Schlüssel
+        id: key
+        run: echo "key=region-$(date -u +%Y-%m)-${{ hashFiles('scripts/region/**', 'js/osmgeo.js', 'js/sources.js', 'js/geo.js') }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: data
+          key: ${{ steps.key.outputs.key }}
+          # Fällt der Neubau aus (Geofabrik nicht erreichbar), bleibt der letzte Stand
+          restore-keys: region-
+      - name: OSM-Auszüge laden
+        id: download
+        if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/osm"
+          node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; for (const r of Object.values(REGIONS)) for (const u of r.sources) console.log(u)" | sort -u > "$RUNNER_TEMP/osm/urls.txt"
+          while read -r url; do
+            curl -fsSL --retry 3 --retry-delay 20 -o "$RUNNER_TEMP/osm/$(basename "$url")" "$url"
+          done < "$RUNNER_TEMP/osm/urls.txt"
+          ls -la "$RUNNER_TEMP/osm"
+      - name: Regionsdaten bauen
+        if: steps.cache.outputs.cache-hit != 'true' && steps.download.outcome == 'success'
+        continue-on-error: true
+        run: |
+          for region in $(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(Object.keys(REGIONS).join(' '))"); do
+            args=""
+            for url in $(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(REGIONS['$region'].sources.join(' '))"); do
+              args="$args --pbf $RUNNER_TEMP/osm/$(basename "$url")"
+            done
+            node --max-old-space-size=6144 scripts/region/build.mjs "$region" $args
+          done
+      - name: Daten vorhanden?
+        run: test -f data/regions.json && du -sh data
+      - uses: actions/upload-artifact@v4
+        with:
+          name: region-data
+          path: data
+          retention-days: 3
+
   deploy:
-    needs: test
+    needs: [test, region]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: region-data
+          path: data
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

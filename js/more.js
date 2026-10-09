@@ -15,7 +15,8 @@ import { openDiceSheet, openListsSheet } from './random.js';
 import { openShareSheet, openImportSheet } from './share.js';
 import { openTilesSheet, clearTileCache, cacheStats } from './tiles.js';
 import { bundleMeta, bundleStats, clearBundle } from './bundle.js';
-import { prepareArea, planSteps, estimateTiles } from './prefetch.js';
+import { prepareArea, planSteps, estimateTiles, regionFor } from './prefetch.js';
+import { listRegions, cachedCount, REGION_CACHE } from './region.js';
 import { exportText } from './rounds.js';
 import * as Rules from './rules.js';
 import * as Endgame from './endgame.js';
@@ -632,14 +633,30 @@ async function offlinePage(host) {
       row({ icon: 'map', title: 'Nur Kartenkacheln', onClick: () => openTilesSheet() })),
   );
 
+  // Vorgebaute Regionsdaten: welche Regionen es gibt, wie aktuell, was schon auf dem Gerät ist
+  const regionen = listRegions();
+  if (regionen.length) {
+    const zeilen = await Promise.all(regionen.map(async (r) => {
+      const anzahl = Object.keys(r.files).length;
+      const hier = await cachedCount(r);
+      return row({
+        icon: 'mapPinned', title: r.name,
+        sub: `Stand ${new Date(r.built).toLocaleDateString('de-DE')} · ${hier} von ${anzahl} Dateien auf dem Gerät`,
+      });
+    }));
+    host.insertBefore(group('Vorgebaute Regionen', ...zeilen), slot);
+    host.insertBefore(el('div', { class: 'hint', text: 'In diesen Regionen beantwortet die App Ortsfragen ohne Overpass. Einmal abgerufene Dateien bleiben auf dem Gerät; „Spielgebiet vorbereiten" holt alle auf einmal.' }), slot);
+  }
+
   const [kacheln, vorrat] = await Promise.all([cacheStats(), bundleStats()]);
   clear(slot);
   if (meta) {
     const z = meta.zaehler || {};
     slot.append(
-      row({ title: 'Orte', value: String(z.pois || 0) }),
-      row({ title: 'Geometrien', value: String(z.refs || 0) }),
-      row({ title: 'Gebiete', value: `${z.orte || 0}${z.gebiete ? ` · ${z.gebiete} Umrisse` : ''}` }),
+      meta.region ? row({ title: 'Regionsdaten', value: `${meta.region.name} · ${z.region || 0} Dateien` }) : null,
+      meta.region ? null : row({ title: 'Orte', value: String(z.pois || 0) }),
+      meta.region ? null : row({ title: 'Geometrien', value: String(z.refs || 0) }),
+      meta.region ? null : row({ title: 'Gebiete', value: `${z.orte || 0}${z.gebiete ? ` · ${z.gebiete} Umrisse` : ''}` }),
       z.hoehe ? row({ title: 'Höhenpunkte', value: String(z.hoehe) }) : null,
       row({ title: 'Kartenkacheln', value: String(kacheln.count) }),
       row({ title: 'Speicher', value: formatBytes(vorrat.bytes) }),
@@ -647,14 +664,19 @@ async function offlinePage(host) {
       meta.fehler?.length ? row({ title: 'Fehlgeschlagen', value: `${meta.fehler.length} Abfragen` }) : null,
     );
   } else {
-    slot.append(row({ title: 'Nichts vorbereitet', sub: kacheln.count ? `${kacheln.count} Kartenkacheln liegen bereits vor` : 'Unterwegs braucht jede Frage dann Empfang' }));
+    slot.append(row({
+      title: 'Nichts vorbereitet',
+      sub: kacheln.count ? `${kacheln.count} Kartenkacheln liegen bereits vor`
+        : regionen.length ? 'Ohne Vorbereitung brauchen Karte und noch nicht abgerufene Regionsdateien Empfang'
+          : 'Unterwegs braucht jede Frage dann Empfang',
+    }));
   }
   if (meta || kacheln.count) {
     host.append(group(null, row({
       icon: 'trash', title: 'Vorrat löschen', danger: true,
       onClick: async () => {
         if (!(await confirmSheet('Offline-Vorrat löschen?', 'Karten und vorgeladene Daten werden entfernt.', { danger: true, okLabel: 'Löschen' }))) return;
-        await Promise.all([clearBundle(), clearTileCache()]);
+        await Promise.all([clearBundle(), clearTileCache(), caches.delete(REGION_CACHE)]);
         render();
         toast('Vorrat geleert', 'ok');
       },
@@ -666,24 +688,34 @@ function openPrepareSheet() {
   const area = getState().area;
   if (!area) return toast('Erst ein Spielgebiet festlegen', 'error');
   let withTiles = true;
+  let withStreets = true;
   let zoomExtra = 3;
   let controller = null;
 
   openSheet('Spielgebiet vorbereiten', (body, close) => {
-    const plan = planSteps(area, { withTiles, zoomExtra });
+    const region = regionFor(area);
     const info = el('div', { class: 'card-sub' });
     const bar = el('div', { class: 'progress' }, el('i', { style: { width: '0%' } }));
     const status = el('div', { class: 'hint' });
     const detail = el('input', { type: 'range', min: '1', max: '5', value: String(zoomExtra) });
 
     function refresh() {
-      const p = planSteps(area, { withTiles, zoomExtra });
+      const p = planSteps(area, { withTiles, zoomExtra, withStreets });
       const k = withTiles ? estimateTiles(area, zoomExtra) : 0;
+      const kachelnMb = Math.round(k * 18 / 1024);
+      if (p.region) {
+        info.textContent = `Regionsdaten ${p.region.name}: ${p.regionFiles.length} Dateien, ${formatBytes(p.regionBytes)} unkomprimiert`
+          + (p.elevation ? ' · Geländehöhen' : '')
+          + (withTiles ? ` · ${k} Kartenkacheln (grob ${kachelnMb} MB)` : '');
+        const sekunden = 10 + (p.elevation ? 5 : 0) + (withTiles ? k / 12 : 0);
+        status.textContent = `Dauer grob ${Math.max(1, Math.round(sekunden / 60))} Minute(n). Ortsdaten kommen aus dem vorgebauten Auszug, ohne Overpass.`;
+        return;
+      }
       info.textContent = `${p.pois.length} Ortskategorien · ${p.refs.length} Bezugsobjekte`
         + (p.adminLevels.length ? ` · ${p.adminLevels.length} Verwaltungsebenen` : '')
         + (p.elevation ? ' · Geländehöhen' : '')
         + ' · 1 Gebietsliste'
-        + (withTiles ? ` · ${k} Kacheln (grob ${Math.round(k * 18 / 1024)} MB)` : '');
+        + (withTiles ? ` · ${k} Kacheln (grob ${kachelnMb} MB)` : '');
       const sekunden = Math.round((p.schritte - (withTiles ? 1 : 0)) * 2.5 + (withTiles ? k / 12 : 0));
       status.textContent = `Dauer grob ${Math.max(1, Math.round(sekunden / 60))} Minuten. Zwischen den Abfragen wird bewusst gewartet – die OpenStreetMap-Server sind gespendet.`;
     }
@@ -691,11 +723,15 @@ function openPrepareSheet() {
     detail.addEventListener('input', () => { zoomExtra = parseInt(detail.value, 10); refresh(); });
 
     append(body,
-      el('div', { class: 'hint', text: 'Holt alles, was die Fragen später brauchen: Orte je Kategorie, Geometrie der Bezugsobjekte, Orts- und Grenzliste, dazu die Karte selbst.' }),
-      el('label', { class: 'field' }, 'Kartenkacheln mitladen',
-        el('div', { class: 'seg' },
-          el('button', { class: 'on', onclick: (e) => { withTiles = true; segOn(e); refresh(); } }, 'Ja'),
-          el('button', { onclick: (e) => { withTiles = false; segOn(e); refresh(); } }, 'Nein'))),
+      el('div', { class: 'hint', text: region
+        ? `Das Spielgebiet liegt in der Region „${region.name}". Orte, Linien, Grenzen und Straßen liegen dort fertig vor und werden nur auf das Gerät geholt, dazu die Karte selbst.`
+        : 'Holt alles, was die Fragen später brauchen: Orte je Kategorie, Geometrie der Bezugsobjekte, Orts- und Grenzliste, dazu die Karte selbst.' }),
+      el('div', { class: 'list' },
+        row({ icon: 'map', title: 'Kartenkacheln mitladen', control: toggleSwitch(withTiles, (v) => { withTiles = v; refresh(); }) }),
+        region ? row({
+          icon: 'footprints', title: 'Straßennetz fürs Endgame', sub: 'Damit das Endgame auch im Funkloch startet',
+          control: toggleSwitch(withStreets, (v) => { withStreets = v; refresh(); }),
+        }) : null),
       el('label', { class: 'field' }, 'Kartendetail', detail),
       info, bar, status,
     );
@@ -709,7 +745,7 @@ function openPrepareSheet() {
         startBtn.textContent = 'Abbrechen';
         try {
           const meta = await prepareArea(area, {
-            withTiles, zoomExtra, signal: controller.signal,
+            withTiles, zoomExtra, withStreets, signal: controller.signal,
             onProgress: ({ erledigt, gesamt, text }) => {
               bar.firstChild.style.width = `${(erledigt / gesamt) * 100}%`;
               status.textContent = `${erledigt} / ${gesamt} · ${text}`;
@@ -718,7 +754,7 @@ function openPrepareSheet() {
           close();
           render();
           toast(meta.fehler.length
-            ? `Vorbereitet, ${meta.fehler.length} Abfragen fehlgeschlagen`
+            ? `Vorbereitet, ${meta.fehler.length} Schritte mit Fehlern`
             : 'Spielgebiet ist offline verfügbar', meta.fehler.length ? '' : 'ok');
         } catch (e) {
           status.textContent = String(e.message || e);
