@@ -334,7 +334,7 @@ function buildRefs(out, elements, region) {
   } else {
     feats = [];
     for (const e of elements) {
-      const id = G.identityOf(e);
+      const ids = G.identitiesOf(e, spec.refPrefix);
       let fs;
       if (e.type === 'relation' && spec.geom !== 'line') {
         // Ein Umriss, der sich nicht schließt (Teil eines großen Gebiets, das über den
@@ -347,7 +347,7 @@ function buildRefs(out, elements, region) {
       } else {
         fs = G.elementToFeatures(e, spec.geom);
       }
-      for (const f of fs) if (f.points.length) feats.push({ ...f, name: id.name, key: id.key });
+      for (const f of fs) if (f.points.length) for (const id of ids) feats.push({ ...f, name: id.name, key: id.key });
     }
   }
   feats = G.mergeLines(feats, !!spec.directed)

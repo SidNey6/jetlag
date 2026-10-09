@@ -18,7 +18,7 @@ import { initRegions } from './region.js';
 import { el, clear, openSheet, promptSheet, toast, icon, row } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.7.0';
+window.__JL_VERSION__ = 'v1.7.1';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -169,6 +169,9 @@ async function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   try {
     const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    // Ein Update aus einem früheren Öffnen wartet schon (iOS beendet installierte Apps
+    // selten ganz) – dann gleich anbieten, statt bei der alten Version zu bleiben
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdateToast(reg.waiting);
     reg.addEventListener('updatefound', () => {
       const sw = reg.installing;
       if (!sw) return;

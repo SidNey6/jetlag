@@ -186,3 +186,13 @@ test('Zurücksetzen auf das mitgelieferte Regelwerk räumt den Zustand auf', () 
   State.update((s) => { s.rules = null; });
   assert.equal(Rules.isCustom(), false);
 });
+
+test('Matching kennt Autobahn und Landstraße als Linien', () => {
+  const matching = data.questions.find((q) => q.id === 'matching');
+  const auto = matching.options.find((o) => o.label === 'Autobahn');
+  const land = matching.options.find((o) => o.label === 'Landstraße');
+  assert.equal(auto.osm, 'motorway');
+  assert.deepEqual(land.osm, ['federal_road', 'state_road', 'county_road']);
+  for (const o of [auto, land]) assert.equal(o.match, 'shape', `${o.label} muss als Linie verglichen werden`);
+  for (const id of land.osm) assert.ok(Sources.reference(id)?.refPrefix, `${id} braucht refPrefix`);
+});

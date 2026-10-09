@@ -48,11 +48,16 @@ export const POI_CATEGORIES = [
 // from: Filter aus POI_CATEGORIES übernehmen
 // param: Platzhalter im Filter, den die Regeloption füllt (z. B. {adminLevel})
 // kind: 'elevation' – kein OSM, sondern Höhenmodell
+// refPrefix: Straßen gehören über ihre Nummer zusammen (A 565, B 9, L 158), nicht über den
+//           Straßennamen – sonst zerfiele die B 9 in Bonn in Adenauerallee, Bonner Straße …
 // directed: die Wegrichtung in OSM ist verlässlich (Gewässer fließen in Zeichenrichtung,
 //           Küsten haben Land links) – Voraussetzung für Seitenfragen ("gleiche Flussseite?")
 export const REFERENCES = [
-  { id: 'motorway',       label: 'Autobahn',                  q: ['way["highway"="motorway"]'], geom: 'line', ladder: [3, 10, 30, 80, 200] },
+  { id: 'motorway',       label: 'Autobahn',                  q: ['way["highway"="motorway"]'], geom: 'line', ladder: [3, 10, 30, 80, 200], refPrefix: 'A' },
   { id: 'trunk',          label: 'Schnellstraße',             q: ['way["highway"~"^(motorway|trunk)$"]'], geom: 'line', ladder: [3, 10, 30, 80] },
+  { id: 'federal_road',   label: 'Bundesstraße',              q: ['way["highway"~"^(trunk|primary|secondary)$"]["ref"~"(^|;) *B ?[0-9]"]'], geom: 'line', ladder: [1, 4, 12, 40], refPrefix: 'B' },
+  { id: 'state_road',     label: 'Landesstraße',              q: ['way["highway"~"^(primary|secondary|tertiary|unclassified)$"]["ref"~"(^|;) *L ?[0-9]"]'], geom: 'line', ladder: [1, 3, 10, 30], refPrefix: 'L' },
+  { id: 'county_road',    label: 'Kreisstraße',               q: ['way["highway"~"^(secondary|tertiary|unclassified)$"]["ref"~"(^|;) *K ?[0-9]"]'], geom: 'line', ladder: [1, 3, 10, 30], refPrefix: 'K' },
   { id: 'rail',           label: 'Bahnstrecke',               q: ['way["railway"="rail"]["service"!~"."]'], geom: 'line', ladder: [2, 8, 25, 80] },
   { id: 'highspeed',      label: 'Schnellfahrstrecke',        q: ['way["railway"="rail"]["highspeed"="yes"]'], geom: 'line', ladder: [10, 40, 120, 300] },
   { id: 'bus_route',      label: 'Buslinie',                  q: ['relation["route"="bus"]'], geom: 'lines', ladder: [1, 3, 8, 25] },

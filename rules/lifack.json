@@ -2,9 +2,9 @@
   "schemaVersion": 2,
   "id": "lifack-hide-and-seek",
   "name": "Hide and Seek (lifack.ch)",
-  "version": "2026-10-09",
+  "version": "2026-10-09b",
   "source": "https://www.lifack.ch/docs/quick_start_guide/",
-  "sourceNote": "Werte übernommen von lifack.ch, einer inoffiziellen Fan-Umsetzung von Jet Lag: Hide and Seek. Nicht mit Jet Lag, Nebula oder Wendover Productions verbunden. Die Originalmaße in Meilen sind hier auf runde metrische Werte umgestellt (¼ Meile → 400 m, 1 Meile → 1,6 km, 3 Meilen → 5 km). Ergänzt um die Matching-Frage „Flussseite“.",
+  "sourceNote": "Werte übernommen von lifack.ch, einer inoffiziellen Fan-Umsetzung von Jet Lag: Hide and Seek. Nicht mit Jet Lag, Nebula oder Wendover Productions verbunden. Die Originalmaße in Meilen sind hier auf runde metrische Werte umgestellt (¼ Meile → 400 m, 1 Meile → 1,6 km, 3 Meilen → 5 km). Ergänzt um die Matching-Fragen „Flussseite“, „Autobahn“ und „Landstraße“.",
   "unitsOfOrigin": "imperial",
   "gameSizes": [
     {
@@ -142,6 +142,34 @@
           ],
           "appType": null,
           "note": "Nicht auf der Karte auswertbar – wird nur protokolliert"
+        },
+        {
+          "label": "Autobahn",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": "motorway",
+          "match": "shape",
+          "note": "Ergänzung, nicht von lifack.ch: Ist deine nächste Autobahn dieselbe wie meine?"
+        },
+        {
+          "label": "Landstraße",
+          "group": "Verkehr",
+          "sizes": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "osm": [
+            "federal_road",
+            "state_road",
+            "county_road"
+          ],
+          "match": "shape",
+          "note": "Ergänzung, nicht von lifack.ch: nächste Bundes-, Landes- oder Kreisstraße, unterschieden nach ihrer Nummer (B 9, L 158, K 12)"
         },
         {
           "label": "Verwaltungsebene 1",

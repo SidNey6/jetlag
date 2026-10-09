@@ -126,13 +126,33 @@ export const ROUTE_LABEL = { bus: 'Bus', tram: 'Tram', subway: 'U-Bahn', light_r
 // Hin- und Rückrichtung oder in viele Teilstücke zerlegt. Wichtig für Fragen der Art
 // "ist deine nächste Linie dieselbe wie meine?".
 export function identityOf(e) {
+  return identitiesOf(e)[0];
+}
+
+const ROAD = /^(motorway|trunk|primary|secondary|tertiary|unclassified)(_link)?$/;
+
+// Straßennummer vereinheitlichen: "B9" → "B 9"
+function normRef(r) {
+  return r.trim().replace(/^([A-Z]{1,2})\s*(\d)/, '$1 $2');
+}
+
+// Alle Identitäten eines Elements. Meist genau eine; ein Straßenstück mit mehreren
+// Nummern ("A 1;A 61") gehört aber zu beiden Autobahnen – im Grenzfall sind beide gleich
+// nah. prefix (aus sources.js: refPrefix) beschränkt auf die gesuchte Straßenklasse.
+export function identitiesOf(e, prefix = null) {
   const t = e.tags || {};
   if (t.route) {
     const nr = t.ref || t.name || `#${e.id}`;
-    return { key: `${t.route}:${nr}`, name: t.ref ? `${ROUTE_LABEL[t.route] || t.route} ${t.ref}` : (t.name || nr) };
+    return [{ key: `${t.route}:${nr}`, name: t.ref ? `${ROUTE_LABEL[t.route] || t.route} ${t.ref}` : (t.name || nr) }];
+  }
+  if (t.highway && t.ref && ROAD.test(t.highway)) {
+    const refs = t.ref.split(';').map(normRef).filter(Boolean);
+    const passend = prefix ? refs.filter((r) => r.startsWith(`${prefix} `)) : refs;
+    const liste = passend.length ? passend : refs;
+    if (liste.length) return liste.map((r) => ({ key: `road:${r}`, name: r }));
   }
   const name = t.name || t.ref || t.int_ref || null;
-  return { key: name ? `n:${name}` : `${e.type}:${e.id}`, name };
+  return [{ key: name ? `n:${name}` : `${e.type}:${e.id}`, name }];
 }
 
 // Ein OSM-Element in Features zerlegen. Relationen vom Typ Linie ('lines') liefern
@@ -163,13 +183,11 @@ export function elementToFeatures(e, geomHint) {
 export function featuresFrom(json, spec, center) {
   const out = [];
   for (const e of json.elements || []) {
-    const id = identityOf(e);
+    const ids = identitiesOf(e, spec.refPrefix);
     for (const f of elementToFeatures(e, spec.geom)) {
       if (!f.points.length) continue;
-      f.name = id.name;
-      f.key = id.key;
       f.distance = distanceToFeatures(center, [f]);
-      out.push(f);
+      for (const id of ids) out.push({ ...f, name: id.name, key: id.key });
     }
   }
   return out.sort((a, b) => a.distance - b.distance);

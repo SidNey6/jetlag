@@ -177,7 +177,10 @@ App rechnet und zeigt durchgehend in Metern und Kilometern.
 | Mittel | 60 Min | 400 m | 5 Min | 10 Min |
 | Groß | 180 Min | 800 m | 5 Min | 20 Min |
 
-Ergänzt ist eine Matching-Frage, die lifack.ch nicht hat: **Flussseite**.
+Ergänzt sind Matching-Fragen, die lifack.ch nicht hat: **Flussseite**, **Autobahn** und
+**Landstraße** („Ist deine nächste Autobahn dieselbe wie meine?"). Straßen erkennt die App an
+ihrer Nummer – die B 9 bleibt die B 9, auch wenn sie in Bonn mal Adenauerallee und mal
+Bonner Straße heißt. „Landstraße" umfasst Bundes-, Landes- und Kreisstraßen.
 
 Die sechs Kategorien mit ihren Ziehwerten: Matching und Measuring je *3 ziehen, 1 behalten*,
 Thermometer und Radar *2 ziehen, 1 behalten*, Tentacles *4 ziehen, 2 behalten*, Photos

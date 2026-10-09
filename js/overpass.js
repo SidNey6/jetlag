@@ -248,17 +248,46 @@ async function referenceFromRegion(center, spec, key, area) {
   if (!all || !all.length) return null;
   const mit = all.map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
     .sort((a, b) => a.distance - b.distance);
-  // Dieselbe Abdeckung wie bei der Online-Suche: ganzes Spielgebiet plus der Abstand
-  // zum nächsten Objekt. Liegt die vollständig in der Region, kann nichts fehlen.
-  const reichweite = (radiusToCover(center, area) + mit[0].distance) * 1.1;
-  const kept = mit.filter((f) => f.distance <= reichweite);
+
+  // Vollständig ist die Antwort, wenn für jeden Punkt des Spielgebiets das nächste
+  // Objekt näher liegt als der Rand der Region – dann kann außerhalb nichts Näheres
+  // fehlen. Geprüft an Ecken, Kantenmitten und Mitte des Gebiets und am Standort.
+  // (Vorher zählte der Kreis vom Standort bis zur fernsten Gebietsecke – der ragte bei
+  // einem Bonner Spielgebiet fast immer über die Region hinaus, und jede Frage ging
+  // unnötig an Overpass.)
+  let complete = true;
+  let reichweite = mit[0].distance;
+  for (const p of samplePoints(center, area)) {
+    const d = distanceToFeatures(p, mit);
+    if (!Number.isFinite(d) || !Region.circleInside(region.bounds, p, d)) complete = false;
+    reichweite = Math.max(reichweite, distance(center, p) + d);
+  }
+  // Nur, was für irgendeinen Punkt im Gebiet das nächste sein kann
+  const kept = mit.filter((f) => f.distance <= reichweite * 1.05 + 100);
   const slim = fitBudget(kept).map((f) => ({
     type: f.type, name: f.name, key: f.key, distance: f.distance, points: f.points,
   }));
   return {
-    complete: Region.circleInside(region.bounds, center, reichweite),
+    complete,
     result: { spec, feats: slim, coveredKm: Math.ceil(reichweite / KM), offline: true, region: region.name },
   };
+}
+
+function samplePoints(center, area) {
+  const b = area ? areaBounds(area) : boxAround(center, 5 * KM);
+  const midLat = (b.south + b.north) / 2, midLng = (b.west + b.east) / 2;
+  return [
+    center,
+    { lat: midLat, lng: midLng },
+    { lat: b.south, lng: b.west }, { lat: b.south, lng: b.east }, { lat: b.north, lng: b.west }, { lat: b.north, lng: b.east },
+    { lat: b.south, lng: midLng }, { lat: b.north, lng: midLng }, { lat: midLat, lng: b.west }, { lat: midLat, lng: b.east },
+  ];
+}
+
+function boxAround(center, radiusM) {
+  const n = destination(center, 0, radiusM), s = destination(center, 180, radiusM);
+  const e = destination(center, 90, radiusM), w = destination(center, 270, radiusM);
+  return { south: s.lat, north: n.lat, west: w.lng, east: e.lng };
 }
 
 async function referenceOnline(center, spec, statements, { area, maxKm, timeout }) {
@@ -338,6 +367,51 @@ export async function findCandidates(center, refIds, { limit = 40, ...opts } = {
   }
   const candidates = [...byKey.values()].sort((a, b) => a.distance - b.distance).slice(0, limit);
   return { label: res.label, candidates, offline: res.offline };
+}
+
+// Für "gleiche Flussseite?": Gesucht ist kein nächstes Objekt, sondern ein Fluss, an
+// dem man sich orientiert – der Rhein, auch wenn ein Bach näher liegt. Deshalb alle
+// benannten Flüsse samt ihrem ganzen Verlauf, ohne Abschneiden nach Entfernung.
+// Unbenannte Gewässer fallen weg: nach denen kann man nicht fragen.
+const SEITE_UMKREIS_KM = 20;
+
+export async function findSideCandidates(center, refIds, { limit = 8 } = {}) {
+  await Region.initRegions();
+  const ids = Array.isArray(refIds) ? refIds : [refIds];
+  const region = Region.regionAt(center);
+  let feats = [];
+  let offline = false;
+  if (region) {
+    for (const id of ids) {
+      const liste = await Region.regionTry(region, bundleKey(id));
+      if (liste) feats.push(...liste);
+    }
+    offline = feats.length > 0;
+  }
+  if (!feats.length) {
+    const timeout = getState().settings.overpassTimeout || 25;
+    for (const id of ids) {
+      const spec = reference(id);
+      const json = await query(aroundQuery(referenceStatements(spec), center, SEITE_UMKREIS_KM, timeout));
+      feats.push(...mergeLines(featuresFrom(json, spec, center), !!spec.directed));
+    }
+  }
+
+  const byKey = new Map();
+  for (const f of feats) {
+    if (!f.name || f.type !== 'line') continue;
+    if (!byKey.has(f.key)) byKey.set(f.key, { id: f.key, name: f.name, features: [], distance: Infinity });
+    const c = byKey.get(f.key);
+    c.features.push({ type: f.type, points: f.points });
+  }
+  const candidates = [...byKey.values()]
+    .map((c) => ({ ...c, distance: distanceToFeatures(center, c.features) }))
+    .filter((c) => c.distance <= SEITE_UMKREIS_KM * KM)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, limit)
+    .map((c) => ({ ...c, features: fitBudget(c.features, 4000).map((f) => ({ type: f.type, points: f.points })) }));
+  if (!candidates.length) throw new Error(`Kein benannter Fluss im Umkreis von ${SEITE_UMKREIS_KM} km`);
+  return { candidates, offline };
 }
 
 // Wie weit reicht das Spielgebiet von hier aus? Danach richtet sich die Abdeckung.

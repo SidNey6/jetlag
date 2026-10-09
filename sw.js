@@ -2,7 +2,7 @@
 // Cache bedienen, Overpass niemals cachen (veraltete Geodaten wären schlimmer als
 // eine ehrliche Fehlermeldung).
 
-const VERSION = 'v1.7.0';
+const VERSION = 'v1.7.1';
 const APP_CACHE = `jetlag-app-${VERSION}`;
 const TILE_CACHE = 'jetlag-tiles-v1';
 

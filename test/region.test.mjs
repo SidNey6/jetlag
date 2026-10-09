@@ -238,3 +238,18 @@ test('Straßenkacheln decken den Kreis um eine Haltestelle ab', () => {
   assert.ok(keys.includes(G.streetTileKey(50.732, 7.098, tile)));
   assert.equal(new Set(keys).size, keys.length);
 });
+
+test('Straßen gehören über ihre Nummer zusammen, nicht über den Namen', () => {
+  // Gemeinsame Strecke zweier Autobahnen zählt für beide
+  assert.deepEqual(G.identitiesOf({ type: 'way', id: 1, tags: { highway: 'motorway', ref: 'A 1;A61' } }, 'A').map((i) => i.key),
+    ['road:A 1', 'road:A 61']);
+  // Die B 9 heißt in Bonn mal Adenauerallee, mal Bonner Straße – bleibt aber die B 9
+  const a = G.identitiesOf({ type: 'way', id: 2, tags: { highway: 'primary', ref: 'B9', name: 'Adenauerallee' } }, 'B');
+  const b = G.identitiesOf({ type: 'way', id: 3, tags: { highway: 'primary', ref: 'B 9', name: 'Bonner Straße' } }, 'B');
+  assert.equal(a[0].key, b[0].key);
+  assert.equal(a[0].name, 'B 9');
+  // Bei Doppelnummern zählt nur die gesuchte Klasse
+  assert.deepEqual(G.identitiesOf({ type: 'way', id: 4, tags: { highway: 'secondary', ref: 'B 56;L 113' } }, 'L').map((i) => i.name), ['L 113']);
+  // Gewöhnliche Straßen ohne Nummer behalten ihren Namen
+  assert.equal(G.identitiesOf({ type: 'way', id: 5, tags: { highway: 'residential', name: 'Poststraße' } })[0].key, 'n:Poststraße');
+});

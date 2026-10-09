@@ -7,7 +7,7 @@ import * as Loc from './location.js';
 import * as MapMod from './map.js';
 import { distance, formatDistance, bearing } from './geo.js';
 import { el, clear, append, openSheet, confirmSheet, toast, segmented, formatTime, icon, button, iconButton } from './ui/ui.js';
-import { poiSheet, areaPickerSheet, findPois, findNearestFeatures, findCandidates, adminAreaAt, REFERENCES, POI_CATEGORIES } from './overpass.js';
+import { poiSheet, areaPickerSheet, findPois, findNearestFeatures, findCandidates, findSideCandidates, adminAreaAt, REFERENCES, POI_CATEGORIES } from './overpass.js';
 import { poiCategory, reference, SIDE_REFERENCES } from './sources.js';
 import { elevationGridFor, fetchElevationAt } from './elevation.js';
 import { sampleGrid, sideOfLines } from './geo.js';
@@ -775,7 +775,7 @@ function sideForm(body, existing, prefill) {
     if (!myPoint) { status.textContent = 'Kein Standort – erst Position setzen.'; return; }
     status.textContent = 'Suche Gewässer in der Nähe …';
     try {
-      const res = await findCandidates(myPoint, ids, { area: getState().area, limit: 6 });
+      const res = await findSideCandidates(myPoint, ids);
       candidates = res.candidates;
       chosen = candidates[0] || null;
       status.textContent = candidates.length
