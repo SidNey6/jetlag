@@ -365,7 +365,8 @@ async function referenceOnline(center, spec, statements, { area, maxKm, timeout 
     if (wider.length) feats = wider;
   }
 
-  const merged = mergeLines(feats, !!spec.directed)
+  // Linienrelationen in ihren Wegen lassen (gemeinsame Stücke, siehe compactCandidates)
+  const merged = (spec.geom === 'lines' ? feats : mergeLines(feats, !!spec.directed))
     .map((f) => ({ ...f, distance: distanceToFeatures(center, [f]) }))
     .sort((a, b) => a.distance - b.distance);
   const slim = fitBudget(merged).map((f) => ({

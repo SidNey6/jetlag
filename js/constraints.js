@@ -4,7 +4,7 @@
 // Statistik und Zufallspunkte laufen über allows(), nicht über die Pixel der Maske —
 // dadurch sind sie unabhängig von Zoom und Bildausschnitt.
 
-import { distance, bearing, circle, sector, bisector, pointInPolygon, formatDistance, distanceToFeatures, distanceToRing, sampleGrid, sideOfLines } from './geo.js';
+import { distance, bearing, circle, sector, bisector, pointInPolygon, formatDistance, distanceToFeatures, distanceToRing, sampleGrid, sideOfLines, SegmentIndex, pointsOf, typeOf } from './geo.js';
 
 // icon: Name aus ui/icons.js
 export const TYPES = {
@@ -105,18 +105,15 @@ function nearestAllows(c, p) {
   const yes = !c.invert;
 
   if (c.candidates) {
-    const chosen = c.candidates.find((x) => x.id === c.chosenId);
-    if (!chosen) return true;
-    const dChosen = distanceToFeatures(p, chosen.features);
-    // Andere Kandidaten nur so genau rechnen, wie es für die Entscheidung nötig ist
-    const limit = dChosen + (c.tieToleranceM || 0) + 1e-6;
-    let dOther = Infinity;
-    for (const cand of c.candidates) {
-      if (cand.id === c.chosenId) continue;
-      const d = distanceToFeatures(p, cand.features, Math.min(limit, dOther));
-      if (d < dOther) dOther = d;
-    }
-    if (beyondCutoff(c, p, Math.min(dChosen, dOther))) return true;
+    const ix = candidateIndex(c);
+    if (!ix) return true;
+    // Hinter der Sicherheitsgrenze weiß die Frage nichts – gar nicht erst suchen
+    const limit = c.cutoff && Number.isFinite(c.cutoff.distance)
+      ? Math.max(0, c.cutoff.distance - distance(p, c.cutoff.at)) : Infinity;
+    if (limit === 0) return true;
+    const { dA: dChosen, dB: dOther } = ix.query(p, c.tieToleranceM || 0, limit);
+    const dMin = Math.min(dChosen, dOther);
+    if (!Number.isFinite(dMin) || dMin >= limit) return true;
     return sideA(c, dOther - dChosen, true) === yes;
   }
 
@@ -198,8 +195,74 @@ function fallbackBounds(c) {
 // Abstand zum Bezugsobjekt: bei ausgedehnten Objekten (Autobahn, Küste, Grenze, Park)
 // zählt der nächstgelegene Punkt des Objekts, nicht irgendein Mittelpunkt.
 export function refDistance(c, p) {
-  if (c.features && c.features.length) return distanceToFeatures(p, c.features);
+  if (c.features && c.features.length) {
+    // Viele Objekte (Buslinien, Bäche): über den Index statt alle durchzuzählen
+    const ix = featureIndex(c.features);
+    return ix ? ix.nearest(p) : distanceToFeatures(p, c.features);
+  }
   return c.ref ? distance(p, c.ref) : Infinity;
+}
+
+/* ---------- Indizes je Frage ---------- */
+// Einmal je Frage aufgebaut und gemerkt; die Frage-Objekte ändern sich nach dem Anlegen
+// nicht mehr (Bearbeiten ersetzt sie).
+const candidateIndexes = new WeakMap();
+const featureIndexes = new WeakMap();
+
+function candidateIndex(c) {
+  let ix = candidateIndexes.get(c);
+  if (ix === undefined) {
+    const hatGewaehlt = c.candidates.some((x) => x.id === c.chosenId);
+    ix = hatGewaehlt
+      ? new SegmentIndex(c.candidates.map((x) => candidateFeatures(c, x)), (i) => c.candidates[i].id === c.chosenId)
+      : null;
+    candidateIndexes.set(c, ix);
+  }
+  return ix;
+}
+
+// Geometrie eines Kandidaten: ältere Fragen tragen sie direkt, neue verweisen in den
+// gemeinsamen Vorrat c.pool (dieselbe Straße für zehn Buslinien nur einmal)
+export function candidateFeatures(c, cand) {
+  return cand.features || cand.parts.map((i) => c.pool[i]);
+}
+
+// Kandidaten für den Spielstand verdichten: gleiche Wegstücke in einen gemeinsamen
+// Vorrat, Koordinaten als Zahlenliste auf etwa einen Meter genau.
+export function compactCandidates(candidates, pool = null) {
+  if (!candidates.length || !candidates[0].features) return { candidates, pool };
+  const vorrat = [];
+  const index = new Map();
+  const gleich = new Map(); // dieselbe Punktliste (geteilter Weg aus den Regionsdaten)
+  const r5 = (x) => Math.round(x * 1e5) / 1e5;
+  const out = candidates.map((cand) => ({
+    id: cand.id, name: cand.name,
+    distance: cand.distance != null ? Math.round(cand.distance) : undefined,
+    parts: cand.features.map((f) => {
+      const schon = gleich.get(f.points);
+      if (schon != null && vorrat[schon].t === (f.type === 'polygon' ? 'p' : f.type === 'point' ? 'n' : 'l')) return schon;
+      const c = new Array(f.points.length * 2);
+      f.points.forEach((p, i) => { c[2 * i] = r5(p.lat); c[2 * i + 1] = r5(p.lng); });
+      const t = f.type === 'polygon' ? 'p' : f.type === 'point' ? 'n' : 'l';
+      const key = `${t}${c.join(',')}`;
+      let i = index.get(key);
+      if (i == null) { i = vorrat.length; vorrat.push({ t, c }); index.set(key, i); }
+      gleich.set(f.points, i);
+      return i;
+    }),
+  }));
+  return { candidates: out, pool: vorrat };
+}
+
+function featureIndex(features) {
+  let ix = featureIndexes.get(features);
+  if (ix === undefined) {
+    const punkte = features.reduce((n, f) => n + (f.points ? f.points.length : 0), 0);
+    // Bei wenigen Objekten ist der lineare Weg mit Rechteck-Vorprüfung schneller
+    ix = features.length > 40 || punkte > 3000 ? new SegmentIndex([features]) : null;
+    featureIndexes.set(features, ix);
+  }
+  return ix;
 }
 
 export function compareDistance(c) {
@@ -216,7 +279,10 @@ export function shapes(c, ctx = {}) {
     // Mit Sicherheitsgrenze wirkt die Frage nur in deren Umkreis – dort dafür fein
     // gerastert, sonst verschwände ein Straßenzug zwischen 150-m-Zellen
     if (b && c.cutoff && Number.isFinite(c.cutoff.distance)) b = intersect(b, boxAround(c.cutoff.at, c.cutoff.distance));
-    return b ? [{ kind: 'raster', raster: rasterFor(c, b, ctx.cols || 100) }] : [];
+    if (!b) return [];
+    // ctx.rasterOf rechnet im Hintergrund und liefert null, solange es nicht fertig ist
+    const raster = ctx.rasterOf ? ctx.rasterOf(c, b, ctx.cols || 100) : rasterFor(c, b, ctx.cols || 100);
+    return raster ? [{ kind: 'raster', raster }] : [];
   }
   switch (c.type) {
     case 'radius':
@@ -283,6 +349,14 @@ export function outline(c) {
     case 'thermo':
       return [{ kind: 'path', points: [c.from, c.to], arrow: true }, { kind: 'dot', at: c.from }, { kind: 'dot', at: c.to }];
     case 'nearest':
+      if (c.candidates && c.pool) {
+        // Jedes Wegstück einmal, die gewählte Linie kräftig
+        const gewaehlt = c.candidates.find((x) => x.id === c.chosenId);
+        const kraeftig = new Set(gewaehlt ? gewaehlt.parts : []);
+        return c.pool.map((f, i) => (typeOf(f) === 'point'
+          ? { kind: 'dot', at: pointsOf(f)[0], strong: kraeftig.has(i) }
+          : { kind: 'path', points: pointsOf(f), closed: typeOf(f) === 'polygon', strong: kraeftig.has(i), faint: !kraeftig.has(i) }));
+      }
       if (c.candidates) {
         return c.candidates.flatMap((cand) => cand.features.map((f) => (f.type === 'point'
           ? { kind: 'dot', at: f.points[0], strong: cand.id === c.chosenId }

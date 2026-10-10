@@ -255,16 +255,18 @@ export function mergeLines(feats, directed = false) {
   return [...out, ...rest];
 }
 
-// Stützpunkte begrenzen: lieber gröber als einen Spielstand mit 50.000 Koordinaten.
-export function fitBudget(features, budget = 6000) {
-  let eps = 0.0003;
-  let out = features;
+export function fitBudget(features, budget = 20000) {
+  // Stützpunkte begrenzen, aber nie gröber als etwa 15 m. Früher durfte die Vereinfachung
+  // bis 2 km gehen – bei 190 Buslinien wurden daraus Geraden quer durch die Stadt, und
+  // "nächste Linie" stimmte nicht mehr. Lieber ein etwas größerer Spielstand.
   const count = (fs) => fs.reduce((n, f) => n + f.points.length, 0);
-  while (count(out) > budget && eps < 0.02) {
-    out = features.map((f) => ({ ...f, points: f.points.length > 4 ? simplify(f.points, eps) : f.points }));
-    eps *= 2;
+  const vereinfacht = (eps) => features.map((f) => ({ ...f, points: f.points.length > 4 ? simplify(f.points, eps) : f.points }));
+  let out = vereinfacht(0.00003);
+  for (const eps of [0.00006, 0.0001, 0.00014]) {
+    if (count(out) <= budget) break;
+    out = vereinfacht(eps);
   }
-  return out.map((f) => ({ ...f, points: f.points.length > 8 ? simplify(f.points, 0.0003) : f.points }));
+  return out;
 }
 
 /* ---------- Gebiete ---------- */

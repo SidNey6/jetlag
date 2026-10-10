@@ -3,6 +3,7 @@
 
 import { getState, update, uid } from './state.js';
 import * as C from './constraints.js';
+import * as Compute from './compute.js';
 import * as Loc from './location.js';
 import * as MapMod from './map.js';
 import { distance, formatDistance, bearing } from './geo.js';
@@ -312,7 +313,8 @@ function commit(c, existing) {
   if (existing) {
     update((s) => {
       const i = s.constraints.findIndex((x) => x.id === existing.id);
-      if (i >= 0) s.constraints[i] = { ...existing, ...c };
+      // Neue Revision: Raster und Indizes zur alten Fassung gelten nicht mehr
+      if (i >= 0) s.constraints[i] = { ...existing, ...c, rev: (existing.rev || 0) + 1 };
     }, 'Frage geändert');
   } else {
     const entry = { id: uid('q'), active: true, at: Date.now(), ...c };
@@ -712,7 +714,7 @@ function nearestForm(body, existing, prefill) {
       const liste = eintraege();
       if (!liste.length || !chosenId) { toast('Auswahl fehlt', 'error'); return null; }
       const base = { type: 'nearest', chosenId, invert, mode: same ? 'same' : 'which' };
-      if (candidates) return { ...base, candidates, cutoff };
+      if (candidates) return { ...base, ...C.compactCandidates(candidates, existing?.pool), cutoff };
       return { ...base, pois: pois.map((p) => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name })) };
     },
   };
@@ -1110,18 +1112,21 @@ export function renderConstraintList() {
   }
 
   if (s.area) {
-    const st = C.remainingStats(s.area, s.constraints.filter((c) => c.active !== false), 6000);
-    if (st.fraction != null) {
-      host.append(el('div', { class: 'card' },
-        el('div', { class: 'card-title' },
-          el('span', { class: 'grow', text: 'Restgebiet' }),
-          el('span', { class: 'mono', text: C.formatFraction(st) })),
-        el('div', { class: 'progress' }, el('i', { style: { width: `${Math.max(0.5, st.fraction * 100)}%` } })),
-        el('div', { class: 'card-sub', text: st.remaining === 0
-          ? 'Keine Fläche mehr übrig – widersprechen sich zwei Antworten?'
-          : plural(s.constraints.filter((c) => c.active !== false).length, 'aktive Frage', 'aktive Fragen') }),
-      ));
-    }
+    // Restfläche im Hintergrund – die Liste steht sofort, die Zahl kommt nach
+    const aktiv = s.constraints.filter((c) => c.active !== false);
+    const wert = el('span', { class: 'mono', text: '…' });
+    const balken = el('i', { style: { width: '0%' } });
+    const unter = el('div', { class: 'card-sub', text: plural(aktiv.length, 'aktive Frage', 'aktive Fragen') });
+    host.append(el('div', { class: 'card' },
+      el('div', { class: 'card-title' }, el('span', { class: 'grow', text: 'Restgebiet' }), wert),
+      el('div', { class: 'progress' }, balken),
+      unter));
+    Compute.remaining(s.area, aktiv).then((st) => {
+      if (st.fraction == null) return;
+      wert.textContent = C.formatFraction(st);
+      balken.style.width = `${Math.max(0.5, st.fraction * 100)}%`;
+      if (st.remaining === 0) unter.textContent = 'Keine Fläche mehr übrig – widersprechen sich zwei Antworten?';
+    });
   }
 
   for (const c of [...s.constraints].reverse()) {

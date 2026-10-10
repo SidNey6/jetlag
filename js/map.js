@@ -2,6 +2,7 @@
 
 import { getState, update, uid, powerSaving } from './state.js';
 import { createMask } from './mask.js';
+import * as Compute from './compute.js';
 import * as C from './constraints.js';
 import * as Loc from './location.js';
 import { distance, bearing, formatDistance, formatBearing } from './geo.js';
@@ -20,6 +21,8 @@ let measure = null;      // {points:[], line, markers:[]}
 let picking = null;      // {resolve, banner}
 let longPressTimer = null;
 let suspended = false;   // Taschenmodus: Karte ist verdeckt, nichts zeichnen
+let vector = null;       // Canvas-Renderer für Umrisse und Orte: eine Fläche statt Tausender SVG-Pfade
+let maskSig = null, outlineSig = null, poisRef = null;
 
 export function getMap() { return map; }
 
@@ -48,6 +51,7 @@ export function initMap() {
 
   setTileSource(s.settings.tileUrl);
 
+  vector = L.canvas({ padding: 0.3 });
   layers.area = L.layerGroup().addTo(map);
   layers.zone = L.layerGroup().addTo(map);
   layers.outlines = L.layerGroup().addTo(map);
@@ -64,6 +68,12 @@ export function initMap() {
   bindLongPress();
 
   Loc.onLocation(renderMe);
+  // Ein Raster aus dem Hintergrund ist fertig: Maske nachziehen
+  let nachzug = null;
+  document.addEventListener('jetlag:computed', () => {
+    clearTimeout(nachzug);
+    nachzug = setTimeout(() => { maskSig = null; render(); }, 30);
+  });
   return map;
 }
 
@@ -162,38 +172,34 @@ export function render() {
     bounds: b ? padBounds(b, 0.06) : null,
     cols: powerSaving() ? 70 : 110,
   };
-  const shapes = [];
-  for (const c of active) {
-    const color = (C.TYPES[c.type] || {}).color;
-    for (const sh of C.shapes(c, ctx)) shapes.push({ ...sh, color });
+  // Nur neu berechnen, was sich geändert hat: render() läuft bei jeder Zustandsänderung,
+  // auch wenn nur ein Timer angelegt wurde
+  const fragenSig = active.map(Compute.fingerprint).join(',');
+  const sig = `${JSON.stringify(s.area)}|${fragenSig}|${ctx.cols}`;
+  if (sig !== maskSig) {
+    maskSig = sig;
+    ctx.rasterOf = Compute.rasterOf;
+    const shapes = [];
+    let fehlt = false;
+    for (const c of active) {
+      const color = (C.TYPES[c.type] || {}).color;
+      const formen = C.shapes(c, ctx);
+      if (C.needsRaster(c) && !formen.length) fehlt = true;
+      for (const sh of formen) shapes.push({ ...sh, color });
+    }
+    // Ein Raster rechnet noch: beim nächsten Durchgang erneut zusammenstellen
+    if (fehlt) maskSig = null;
+    mask.setShapes(shapes);
+    mask.setArea(C.areaRing(s.area));
   }
-  mask.setShapes(shapes);
-  mask.setArea(C.areaRing(s.area));
   mask.setOpacity(s.settings.maskOpacity);
   mask.setVisible(s.ui.showMask !== false);
 
-  layers.outlines.clearLayers();
   const mitte = s.settings.showCenters !== false;
-  for (const c of active) {
-    const color = (C.TYPES[c.type] || {}).color || '#94a3b8';
-    for (const o of C.outline(c)) {
-      if (o.kind === 'circle') {
-        L.circle(o.center, { radius: o.radius, color, weight: 1, opacity: 0.5, fill: false, interactive: false }).addTo(layers.outlines);
-        if (mitte) centerDot(o.center, color).addTo(layers.outlines);
-      } else if (o.kind === 'path') {
-        const cls = o.closed ? L.polygon : L.polyline;
-        cls(o.points, {
-          color, weight: o.strong ? 3.5 : 2, opacity: o.faint ? 0.35 : 0.95,
-          dashArray: o.arrow ? '6 4' : null,
-          fill: false, interactive: false,
-        }).addTo(layers.outlines);
-      } else if (o.kind === 'dot') {
-        L.circleMarker(o.at, {
-          radius: o.strong ? 6 : 4, color, weight: 2,
-          fillColor: o.strong ? color : '#0e0f11', fillOpacity: 1, interactive: false,
-        }).addTo(layers.outlines);
-      }
-    }
+  const oSig = `${fragenSig}|${mitte}`;
+  if (oSig !== outlineSig) {
+    outlineSig = oSig;
+    drawOutlines(active, mitte);
   }
 
   layers.area.clearLayers();
@@ -236,18 +242,54 @@ export function render() {
     }).addTo(layers.markers).bindPopup(popupFor(m));
   }
 
-  layers.pois.clearLayers();
-  for (const p of s.pois) {
-    L.circleMarker([p.lat, p.lng], {
-      radius: 5, color: '#fbbf24', weight: 2, fillColor: '#0e0f11', fillOpacity: 1,
-    }).addTo(layers.pois).bindTooltip(p.name || 'POI', { direction: 'top', className: 'jl-label' });
+  if (s.pois !== poisRef) {
+    poisRef = s.pois;
+    layers.pois.clearLayers();
+    for (const p of s.pois) {
+      L.circleMarker([p.lat, p.lng], {
+        radius: 5, color: '#fbbf24', weight: 2, fillColor: '#0e0f11', fillOpacity: 1, renderer: vector,
+      }).addTo(layers.pois).bindTooltip(p.name || 'POI', { direction: 'top', className: 'jl-label' });
+    }
+  }
+}
+
+// Umrisse je Frage, gleichartige Linien zu einer Mehrfachlinie zusammengefasst: aus
+// 5.000 Wegstücken von 190 Buslinien werden zwei Zeichenobjekte statt 5.000.
+function drawOutlines(active, mitte) {
+  layers.outlines.clearLayers();
+  for (const c of active) {
+    const color = (C.TYPES[c.type] || {}).color || '#94a3b8';
+    const pfade = new Map();
+    for (const o of C.outline(c)) {
+      if (o.kind === 'circle') {
+        L.circle(o.center, { radius: o.radius, color, weight: 1, opacity: 0.5, fill: false, interactive: false, renderer: vector }).addTo(layers.outlines);
+        if (mitte) centerDot(o.center, color).addTo(layers.outlines);
+      } else if (o.kind === 'path') {
+        const key = `${o.closed ? 1 : 0}${o.strong ? 1 : 0}${o.faint ? 1 : 0}${o.arrow ? 1 : 0}`;
+        if (!pfade.has(key)) pfade.set(key, { o, liste: [] });
+        pfade.get(key).liste.push(o.points);
+      } else if (o.kind === 'dot') {
+        L.circleMarker(o.at, {
+          radius: o.strong ? 6 : 4, color, weight: 2, renderer: vector,
+          fillColor: o.strong ? color : '#0e0f11', fillOpacity: 1, interactive: false,
+        }).addTo(layers.outlines);
+      }
+    }
+    for (const { o, liste } of pfade.values()) {
+      const cls = o.closed ? L.polygon : L.polyline;
+      cls(liste, {
+        color, weight: o.strong ? 3.5 : 2, opacity: o.faint ? 0.35 : 0.95,
+        dashArray: o.arrow ? '6 4' : null,
+        fill: false, interactive: false, renderer: vector, smoothFactor: 1.5,
+      }).addTo(layers.outlines);
+    }
   }
 }
 
 // Kleiner Marker im Mittelpunkt eines Kreises (abschaltbar unter Einstellungen → Karte)
 function centerDot(p, color) {
   return L.circleMarker([p.lat, p.lng], {
-    radius: 3.5, color: '#0f1012', weight: 1.5, fillColor: color, fillOpacity: 1, interactive: false,
+    radius: 3.5, color: '#0f1012', weight: 1.5, fillColor: color, fillOpacity: 1, interactive: false, renderer: vector,
   });
 }
 

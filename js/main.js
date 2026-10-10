@@ -4,6 +4,7 @@ import { getState, load, update, undo, undoLabel, powerSaving } from './state.js
 import * as MapMod from './map.js';
 import * as Loc from './location.js';
 import * as C from './constraints.js';
+import * as Compute from './compute.js';
 import * as Q from './questions.js';
 import * as Timers from './timers.js';
 import * as Rounds from './rounds.js';
@@ -18,7 +19,7 @@ import { initRegions } from './region.js';
 import { el, clear, openSheet, promptSheet, toast, icon, row } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.8.0';
+window.__JL_VERSION__ = 'v1.9.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -47,45 +48,33 @@ function showTab(name) {
 /* ---------- Restgebiet-Anzeige ---------- */
 
 let statsTimer = null;
-let statsCache = { key: null, label: null, empty: false };
+let statsZug = 0;
 
-// Signatur des Zustands: dieselbe Lage muss nicht zweimal durchgerechnet werden –
-// ein Tabwechsel allein ist kein Grund für 4000 neue Stichproben.
-function statsKey(area, active) {
-  return JSON.stringify(area) + '|' + active.map((c) => c.id).join(',');
-}
-
+// Restfläche im Hintergrund-Thread (compute.js); dort auch gemerkt – ein Tabwechsel
+// allein ist kein Grund für 4000 neue Stichproben.
 function refreshStats(announce = false) {
   clearTimeout(statsTimer);
   statsTimer = setTimeout(() => {
     const s = getState();
     const chip = document.getElementById('stat-remaining');
     const active = s.constraints.filter((c) => c.active !== false);
-    if (!s.area || !active.length) { chip.hidden = true; statsCache.key = null; return; }
-
-    const key = statsKey(s.area, active);
-    if (key === statsCache.key && !announce) {
-      chip.hidden = statsCache.label == null;
-      if (statsCache.label != null) {
-        chip.querySelector('b').textContent = statsCache.label;
-        chip.querySelector('b').style.color = statsCache.empty ? 'var(--danger)' : '';
-      }
-      return;
-    }
-
+    if (!s.area || !active.length) { chip.hidden = true; return; }
+    const zug = ++statsZug;
     const sparsam = powerSaving();
-    const st = C.remainingStats(s.area, active, sparsam ? 2000 : 4000, sparsam ? 2 : 3);
-    const label = C.formatFraction(st);
-    statsCache = { key, label, empty: st.remaining === 0 };
-    chip.hidden = label == null;
-    if (label != null) {
-      chip.querySelector('b').textContent = label;
-      chip.querySelector('b').style.color = st.remaining === 0 ? 'var(--danger)' : '';
+    const b = chip.querySelector('b');
+    if (chip.hidden) { chip.hidden = false; b.textContent = '…'; }
+    Compute.remaining(s.area, active, sparsam ? 2000 : 4000, sparsam ? 2 : 3).then((st) => {
+      if (zug !== statsZug) return; // inzwischen neue Lage
+      const label = C.formatFraction(st);
+      chip.hidden = label == null;
+      if (label == null) return;
+      b.textContent = label;
+      b.style.color = st.remaining === 0 ? 'var(--danger)' : '';
       if (announce) {
         toast(st.remaining === 0 ? 'Kein Gebiet mehr übrig – widersprechen sich zwei Antworten?' : `Restgebiet: ${label}`,
           st.remaining === 0 ? 'error' : 'ok');
       }
-    }
+    });
   }, 120);
 }
 

@@ -151,6 +151,18 @@ Bild, und die Karte verzichtet auf Animationen.
 
 Unabhängig davon spart die App Strom, wo es nichts kostet:
 
+- **Schwere Rechnungen laufen im Hintergrund.** Das Kartenraster für Linien-, Fluss- und
+  Höhenfragen und die Restfläche rechnet ein Web Worker (`js/worker.js`); die Karte bleibt
+  währenddessen bedienbar. Ohne Worker (sehr alte Browser) wird wie früher direkt gerechnet.
+- **Ein räumlicher Index statt Durchzählen.** „Welche Buslinie ist dir am nächsten?" prüft
+  nicht mehr jeden Punkt gegen Tausende Wegstücke, sondern sucht im Gitter nur in der
+  Nachbarschaft; gemeinsame Abschnitte vieler Linien zählen einmal. Bei 190 Bonner
+  Buslinien fiel das Raster von 1,2 s auf unter 0,1 s.
+- **Gemeinsame Wege nur einmal gespeichert.** Zehn Buslinien auf derselben Straße teilen sich
+  ein Stück – in den Regionsdaten und im Spielstand.
+- **Umrisse auf einer Canvas-Fläche**, gleichartige Linien zu einer zusammengefasst; die
+  Karte zeichnet nur neu, was sich geändert hat.
+
 - **GPS läuft nur, wenn es gebraucht wird.** Im Hintergrund, bei eingefrorener und bei von
   Hand gesetzter Position wird die Ortung abgeschaltet – der Frier-Knopf auf der Karte ist
   damit auch ein Stromsparknopf.
@@ -332,6 +344,7 @@ js/tiles.js         Offline-Kachelcache
 js/bundle.js        Ablage der vorab geladenen Gebietsdaten
 js/prefetch.js      Spielgebiet vorbereiten: sammelt alles Nötige ein
 js/state.js         Zustand, Persistenz, Undo
+js/compute.js       Raster und Restfläche im Hintergrund-Thread (js/worker.js)
 scripts/region/     Regionsdaten bauen: PBF-Leser, Bau-Skript, Regionen
 ```
 

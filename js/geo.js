@@ -394,3 +394,192 @@ export function sampleGrid(grid, p) {
   if ([a, b, c, d].some((x) => x == null || Number.isNaN(x))) return null;
   return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }
+
+/* ---------- Räumlicher Index für viele Linien und Flächen ---------- */
+// "Welche Buslinie ist dir am nächsten?" heißt für jeden Rasterpunkt und jede
+// Stichprobe: Abstand zu Tausenden Wegstücken. Linear durchgezählt kostete das auf dem
+// Handy Sekunden. Der Index legt die Stücke in ein Gitter und sucht nur in Ringen um den
+// Punkt, bis nichts Näheres mehr kommen kann. Gemeinsame Abschnitte mehrerer Gruppen
+// (zehn Buslinien auf derselben Straße) liegen nur einmal darin – mit allen Eigentümern.
+//
+// groups: Liste von Feature-Listen; classOf(i) ordnet Gruppe i der Klasse A (true) oder
+// B (false) zu – für "gewählte Linie gegen alle anderen".
+
+// Kompakt gespeicherte Geometrie: { t: 'l'|'p'|'n', c: [lat, lng, lat, lng, …] } statt
+// Punktobjekten – etwa ein Drittel so groß im Spielstand. Entpackt wird bei Bedarf, einmal.
+const entpackt = new WeakMap();
+const KURZTYP = { l: 'line', p: 'polygon', n: 'point' };
+
+export function pointsOf(f) {
+  if (f.points) return f.points;
+  let pts = entpackt.get(f);
+  if (!pts) {
+    pts = new Array(f.c.length / 2);
+    for (let i = 0, j = 0; i < f.c.length; i += 2, j++) pts[j] = { lat: f.c[i], lng: f.c[i + 1] };
+    entpackt.set(f, pts);
+  }
+  return pts;
+}
+
+export function typeOf(f) {
+  return f.type || KURZTYP[f.t] || 'line';
+}
+
+export class SegmentIndex {
+  constructor(groups, classOf = () => true) {
+    let s = 90, n = -90, w = 180, e = -180;
+    for (const g of groups) for (const f of g) for (const p of pointsOf(f)) {
+      if (p.lat < s) s = p.lat; if (p.lat > n) n = p.lat;
+      if (p.lng < w) w = p.lng; if (p.lng > e) e = p.lng;
+    }
+    this.empty = s > n;
+    this.lat0 = this.empty ? 0 : (s + n) / 2;
+    this.lng0 = this.empty ? 0 : (w + e) / 2;
+    this.mLng = metersPerDegLng(this.lat0);
+
+    const ax = [], ay = [], bx = [], by = [], cls = [];
+    const seen = new Map();
+    const polys = [];
+    const xy = (p) => [lngDelta(p.lng, this.lng0) * this.mLng, (p.lat - this.lat0) * M_PER_DEG_LAT];
+    const add = (a, b, isA) => {
+      // Gleiche Strecke = gleicher Schlüssel, egal in welcher Richtung
+      const k1 = `${Math.round(a[0] * 10)},${Math.round(a[1] * 10)}`, k2 = `${Math.round(b[0] * 10)},${Math.round(b[1] * 10)}`;
+      const key = k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
+      const bit = isA ? 1 : 2;
+      const i = seen.get(key);
+      if (i != null) { cls[i] |= bit; return; }
+      seen.set(key, ax.length);
+      ax.push(a[0]); ay.push(a[1]); bx.push(b[0]); by.push(b[1]); cls.push(bit);
+    };
+    groups.forEach((g, gi) => {
+      const isA = !!classOf(gi);
+      for (const f of g) {
+        const pts = pointsOf(f).map(xy);
+        if (!pts.length) continue;
+        if (pts.length === 1) { add(pts[0], pts[0], isA); continue; }
+        for (let i = 1; i < pts.length; i++) add(pts[i - 1], pts[i], isA);
+        if (typeOf(f) === 'polygon' && pts.length > 2) {
+          add(pts[pts.length - 1], pts[0], isA);
+          let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+          for (const [x, y] of pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+          polys.push({ pts, isA, x0, x1, y0, y1 });
+        }
+      }
+    });
+    this.ax = Float64Array.from(ax); this.ay = Float64Array.from(ay);
+    this.bx = Float64Array.from(bx); this.by = Float64Array.from(by);
+    this.cls = Uint8Array.from(cls);
+    this.stamp = new Uint32Array(ax.length);
+    this.qid = 0;
+
+    // Zellgröße nach Dichte: dichte Buslinien brauchen feine Zellen, wenige Autobahnen
+    // grobe – sonst liefe die Ringsuche über Hunderte leere Zellen
+    const breite = Math.max(1, lngDelta(e, w) * this.mLng), hoehe = Math.max(1, (n - s) * M_PER_DEG_LAT);
+    const cell = Math.min(3000, Math.max(80, Math.sqrt((breite * hoehe) / Math.max(1, ax.length)) * 2));
+    this.cell = cell;
+
+    const grid = new Map();
+    let gx0 = Infinity, gx1 = -Infinity, gy0 = Infinity, gy1 = -Infinity;
+    const put = (map, x0, x1, y0, y1, v) => {
+      const cx0 = Math.floor(x0 / cell), cx1 = Math.floor(x1 / cell);
+      const cy0 = Math.floor(y0 / cell), cy1 = Math.floor(y1 / cell);
+      for (let gx = cx0; gx <= cx1; gx++) {
+        for (let gy = cy0; gy <= cy1; gy++) {
+          const k = gx * 1048576 + gy;
+          let list = map.get(k);
+          if (!list) { list = []; map.set(k, list); }
+          list.push(v);
+        }
+      }
+      if (cx0 < gx0) gx0 = cx0; if (cx1 > gx1) gx1 = cx1; if (cy0 < gy0) gy0 = cy0; if (cy1 > gy1) gy1 = cy1;
+    };
+    for (let i = 0; i < ax.length; i++) {
+      put(grid, Math.min(ax[i], bx[i]), Math.max(ax[i], bx[i]), Math.min(ay[i], by[i]), Math.max(ay[i], by[i]), i);
+    }
+    // Flächen ebenfalls ins Gitter: "liegt der Punkt drin?" nur für die, die es betrifft
+    const polyGrid = new Map();
+    polys.forEach((poly, i) => put(polyGrid, poly.x0, poly.x1, poly.y0, poly.y1, i));
+    this.polys = polys;
+    this.grid = grid;
+    this.polyGrid = polyGrid;
+    this.gx0 = gx0; this.gx1 = gx1; this.gy0 = gy0; this.gy1 = gy1;
+  }
+
+  // Nächster Abstand zur Klasse A und zur Klasse B. Gesucht wird, bis alles innerhalb
+  // von min(dA, dB) + extra sicher erfasst ist, höchstens bis limit Meter; was dann noch
+  // Infinity ist, liegt mindestens so weit weg.
+  query(p, extra = 0, limit = Infinity) {
+    let dA = Infinity, dB = Infinity;
+    if (this.empty) return { dA, dB };
+    const x = lngDelta(p.lng, this.lng0) * this.mLng, y = (p.lat - this.lat0) * M_PER_DEG_LAT;
+    const cell = this.cell;
+    const gx = Math.floor(x / cell), gy = Math.floor(y / cell);
+
+    // In einer Fläche ist der Abstand null
+    const inZelle = this.polyGrid.get(gx * 1048576 + gy);
+    if (inZelle) {
+      for (const i of inZelle) {
+        const poly = this.polys[i];
+        if (x < poly.x0 || x > poly.x1 || y < poly.y0 || y > poly.y1) continue;
+        if ((poly.isA ? dA : dB) === 0) continue;
+        if (inRingXY(x, y, poly.pts)) { if (poly.isA) dA = 0; else dB = 0; }
+      }
+    }
+
+    const qid = ++this.qid;
+    const { ax, ay, bx, by, cls, stamp, grid } = this;
+    let best2A = dA === 0 ? 0 : Infinity, best2B = dB === 0 ? 0 : Infinity;
+    // Weiter als bis zum Rand des Gitters braucht kein Ring zu reichen
+    const maxR = Math.max(gx - this.gx0, this.gx1 - gx, gy - this.gy0, this.gy1 - gy, 0);
+    // Bis zu diesem Abstand ist sicher alles gesehen; weiter gefundene Werte sind nur
+    // untere Schranken und werden als "weiter weg" (Infinity) gemeldet
+    let sicher = Infinity;
+    for (let r = 0; r <= maxR; r++) {
+      const naechste = (r - 1) * cell;
+      if (r > 0 && (naechste > limit || naechste > Math.sqrt(Math.min(best2A, best2B)) + extra)) { sicher = naechste; break; }
+      for (let ix = gx - r; ix <= gx + r; ix++) {
+        const rand = r === 0 || ix === gx - r || ix === gx + r;
+        const schritt = rand ? 1 : 2 * r;
+        for (let iy = gy - r; iy <= gy + r; iy += schritt) {
+          const list = grid.get(ix * 1048576 + iy);
+          if (!list) continue;
+          for (let k = 0; k < list.length; k++) {
+            const i = list[k];
+            if (stamp[i] === qid) continue;
+            stamp[i] = qid;
+            const c = cls[i];
+            const d2 = segSq(x, y, ax[i], ay[i], bx[i], by[i]);
+            if ((c & 1) && d2 < best2A) best2A = d2;
+            if ((c & 2) && d2 < best2B) best2B = d2;
+          }
+        }
+      }
+    }
+    const dA2 = Math.sqrt(best2A), dB2 = Math.sqrt(best2B);
+    return { dA: dA2 <= sicher ? dA2 : Infinity, dB: dB2 <= sicher ? dB2 : Infinity };
+  }
+
+  // Abstand zum nächsten Objekt überhaupt
+  nearest(p) {
+    const { dA, dB } = this.query(p, 0);
+    return Math.min(dA, dB);
+  }
+}
+
+function segSq(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  const cx = ax + t * dx - px, cy = ay + t * dy - py;
+  return cx * cx + cy * cy;
+}
+
+function inRingXY(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}

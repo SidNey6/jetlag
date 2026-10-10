@@ -324,36 +324,27 @@ function buildPois(out, elements, region) {
 
 function buildRefs(out, elements, region) {
   const spec = out.spec;
-  let feats;
-  if (spec.geom === 'lines') {
-    // Linienrelationen samt den Mitgliedswegen, wie sie routeQuery von Overpass liefert
-    const rels = elements.filter((e) => e.type === 'relation');
-    const wege = new Map();
-    for (const r of rels) for (const m of r.members) if (m.type === 'way' && m.geometry) wege.set(m.ref, { type: 'way', id: m.ref, geometry: m.geometry });
-    const mitte = { lat: (region.bounds.south + region.bounds.north) / 2, lng: (region.bounds.west + region.bounds.east) / 2 };
-    feats = G.routeFeaturesFrom({ elements: [...rels, ...wege.values()] }, mitte);
-  } else {
-    feats = [];
-    for (const e of elements) {
-      const ids = G.identitiesOf(e, spec.refPrefix, spec.identity === 'name');
-      let fs;
-      if (e.type === 'relation' && spec.geom !== 'line') {
-        // Ein Umriss, der sich nicht schließt (Teil eines großen Gebiets, das über den
-        // Auszug hinausreicht), ist keine Fläche – dann zählen nur seine Linien
-        const ring = G.stitchOuterRing(e.members);
-        fs = G.ringClosed(ring)
-          ? [{ type: 'polygon', points: ring }]
-          : e.members.filter((m) => m.geometry && m.geometry.length > 1)
-            .map((m) => ({ type: 'line', points: m.geometry.map((g) => ({ lat: g.lat, lng: g.lon })) }));
-      } else {
-        fs = G.elementToFeatures(e, spec.geom);
-      }
-      for (const f of fs) if (f.points.length) for (const id of ids) feats.push({ ...f, name: id.name, key: id.key });
+  if (spec.geom === 'lines') return buildRouteLines(elements, region);
+  let feats = [];
+  for (const e of elements) {
+    const ids = G.identitiesOf(e, spec.refPrefix, spec.identity === 'name');
+    let fs;
+    if (e.type === 'relation' && spec.geom !== 'line') {
+      // Ein Umriss, der sich nicht schließt (Teil eines großen Gebiets, das über den
+      // Auszug hinausreicht), ist keine Fläche – dann zählen nur seine Linien
+      const ring = G.stitchOuterRing(e.members);
+      fs = G.ringClosed(ring)
+        ? [{ type: 'polygon', points: ring }]
+        : e.members.filter((m) => m.geometry && m.geometry.length > 1)
+          .map((m) => ({ type: 'line', points: m.geometry.map((g) => ({ lat: g.lat, lng: g.lon })) }));
+    } else {
+      fs = G.elementToFeatures(e, spec.geom);
     }
+    for (const f of fs) if (f.points.length) for (const id of ids) feats.push({ ...f, name: id.name, key: id.key });
   }
   feats = G.mergeLines(feats, !!spec.directed)
     .filter((f) => intersects(boxOf(f.points), region.bounds));
-  const eps = spec.geom === 'line' || spec.geom === 'lines' ? 0.00003 : 0.00005;
+  const eps = spec.geom === 'line' ? 0.00003 : 0.00005;
   return {
     features: feats.map((f) => ({
       t: f.type === 'polygon' ? 'p' : f.type === 'point' ? 'n' : 'l',
@@ -362,6 +353,34 @@ function buildRefs(out, elements, region) {
       c: flat(f.points.length > 4 ? simplify(f.points, eps) : f.points),
     })),
   };
+}
+
+// Bus- und Bahnlinien: jeder OSM-Weg einmal, die Linien als Listen von Wegen. Zehn
+// Buslinien auf derselben Straße teilen sich so ein Stück – in der Datei und später im
+// Spielstand (constraints.compactCandidates).
+function buildRouteLines(elements, region) {
+  const wege = [];
+  const wegIndex = new Map();
+  const linien = new Map();
+  for (const rel of elements.filter((e) => e.type === 'relation')) {
+    const id = G.identityOf(rel);
+    if (!linien.has(id.key)) linien.set(id.key, { n: id.name, k: id.key, w: new Set() });
+    const linie = linien.get(id.key);
+    for (const m of rel.members) {
+      if (m.type !== 'way' || !m.geometry || m.geometry.length < 2) continue;
+      let i = wegIndex.get(m.ref);
+      if (i == null) {
+        const pts = m.geometry.map((g) => ({ lat: g.lat, lng: g.lon }));
+        if (!intersects(boxOf(pts), region.bounds)) continue;
+        i = wege.length;
+        wegIndex.set(m.ref, i);
+        wege.push({ c: flat(pts.length > 4 ? simplify(pts, 0.00003) : pts) });
+      }
+      linie.w.add(i);
+    }
+  }
+  const lines = [...linien.values()].filter((l) => l.w.size).map((l) => ({ n: l.n, k: l.k, w: [...l.w] }));
+  return { ways: wege, lines };
 }
 
 function ringOf(e) {
@@ -474,7 +493,7 @@ export function buildRegion({ region, pbf, out, quiet = false }) {
       for (const [k, list] of buildStreets(els, region)) files.set(`streets/${k}`, { ways: list });
     }
     const data = files.get(o.id);
-    if (data) counts[o.id] = (data.items || data.features || []).length;
+    if (data) counts[o.id] = (data.items || data.features || data.lines || []).length;
   }
   for (const [k, v] of geoms) files.set(k, v);
   // Leere Dateien weglassen, aber vermerken: "gibt es in der Region nicht" (keine
@@ -482,7 +501,7 @@ export function buildRegion({ region, pbf, out, quiet = false }) {
   // dafür nicht online nachsehen
   const leer = [];
   for (const [k, v] of files) {
-    const n = (v.items || v.features || v.ways || [v.c]).length;
+    const n = (v.items || v.features || v.lines || v.ways || [v.c]).length;
     if (!n) { files.delete(k); leer.push(k); }
   }
 

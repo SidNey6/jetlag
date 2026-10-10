@@ -160,6 +160,12 @@ export function decode(path, data) {
     return data.items.map(([id, lat, lng, name]) => ({ id, lat, lng, name }));
   }
   if (path.startsWith('refs/')) {
+    if (data.lines) {
+      // Linien teilen sich Wege: jeder Weg wird einmal entpackt, alle Linien darauf
+      // verweisen auf dieselbe Punktliste
+      const wege = data.ways.map((w) => unflat(w.c));
+      return data.lines.flatMap((l) => l.w.map((i) => ({ type: 'line', name: l.n, key: l.k, points: wege[i] })));
+    }
     return data.features.map((f) => ({ type: TYPE[f.t] || 'line', name: f.n, key: f.k, points: unflat(f.c) }));
   }
   if (path.startsWith('admin/')) {

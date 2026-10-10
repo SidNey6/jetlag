@@ -72,7 +72,10 @@ function notify() {
 export function update(mutator, label = null) {
   if (label) {
     undoStack.push({ label, snapshot: JSON.stringify(state) });
-    if (undoStack.length > 40) undoStack.shift();
+    // Höchstens 40 Schritte und zusammen etwa 8 MB – bei großen Linienfragen hätten
+    // 40 vollständige Kopien den Speicher alter Handys gesprengt
+    let summe = undoStack.reduce((n, x) => n + x.snapshot.length, 0);
+    while (undoStack.length > 1 && (undoStack.length > 40 || summe > 8e6)) summe -= undoStack.shift().snapshot.length;
     redoStack.length = 0;
   }
   const next = mutator(state);

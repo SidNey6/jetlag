@@ -485,3 +485,61 @@ test('Landmasse: auf einer der Inseln oder auf keiner', () => {
   assert.equal(C.shapes(aufInsel)[0].kind, 'rings');
   assert.equal(C.shapes(festland).length, 2);
 });
+
+test('Räumlicher Index liefert dieselben Abstände wie das Durchzählen', () => {
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const gruppen = [];
+  for (let g = 0; g < 30; g++) {
+    const feats = [];
+    for (let f = 0; f < 4; f++) {
+      let x = (rnd() - 0.5) * 12000, y = (rnd() - 0.5) * 12000;
+      const pts = [off(x, y)];
+      for (let i = 0; i < 8; i++) { x += (rnd() - 0.5) * 600; y += (rnd() - 0.5) * 600; pts.push(off(x, y)); }
+      feats.push({ type: 'line', points: pts });
+    }
+    if (g % 5 === 0) feats.push({ type: 'polygon', points: [off(-200 + g * 50, -200), off(200 + g * 50, -200), off(200 + g * 50, 200), off(-200 + g * 50, 200)] });
+    gruppen.push(feats);
+  }
+  // Zwei Gruppen teilen sich eine Strecke (wie Buslinien auf derselben Straße)
+  gruppen[1].push(gruppen[0][0]);
+  const ix = new geo.SegmentIndex(gruppen, (i) => i === 0);
+  for (let k = 0; k < 300; k++) {
+    const p = off((rnd() - 0.5) * 16000, (rnd() - 0.5) * 16000);
+    const dA = geo.distanceToFeatures(p, gruppen[0]);
+    const dB = Math.min(...gruppen.slice(1).map((g) => geo.distanceToFeatures(p, g)));
+    const q = ix.query(p);
+    const tol = (d) => 1 + d * 0.005;
+    assert.ok(Math.abs(Math.min(q.dA, q.dB) - Math.min(dA, dB)) <= tol(Math.min(dA, dB)), `Minimum an Punkt ${k}`);
+    // Was gefunden wird, stimmt; was nicht, liegt weiter weg als das Minimum
+    if (Number.isFinite(q.dA)) assert.ok(Math.abs(q.dA - dA) <= tol(dA), `A an Punkt ${k}`);
+    else assert.ok(dA > Math.min(dA, dB));
+    if (Number.isFinite(q.dB)) assert.ok(Math.abs(q.dB - dB) <= tol(dB), `B an Punkt ${k}`);
+    else assert.ok(dB > Math.min(dA, dB));
+  }
+  // In einer Fläche ist der Abstand null
+  assert.equal(ix.nearest(off(0, 0)), 0);
+});
+
+test('Verdichtete Kandidaten werten genauso aus und teilen gleiche Wegstücke', () => {
+  const strasse = { type: 'line', points: [off(-500, 0), off(0, 0), off(500, 0)] };
+  const ast = (dx) => ({ type: 'line', points: [off(dx, 0), off(dx, 800)] });
+  // Zwei Linien teilen sich die Straße, die dritte liegt weiter nördlich
+  const candidates = [
+    { id: 'a', name: 'Bus 1', features: [strasse, ast(-400)] },
+    { id: 'b', name: 'Bus 2', features: [strasse, ast(400)] },
+    { id: 'c', name: 'Bus 3', features: [{ type: 'line', points: [off(-500, 1200), off(500, 1200)] }] },
+  ];
+  const { candidates: kompakt, pool } = C.compactCandidates(JSON.parse(JSON.stringify(candidates)));
+  assert.equal(pool.length, 4, 'die gemeinsame Straße nur einmal');
+  assert.ok(!kompakt[0].features && kompakt[0].parts.length === 2);
+  const alt = { type: 'nearest', chosenId: 'a', invert: false, candidates };
+  const neu = { type: 'nearest', chosenId: 'a', invert: false, candidates: kompakt, pool };
+  for (const [dx, dy] of [[-400, 400], [400, 400], [0, 1100], [0, 50], [-450, 700]]) {
+    assert.equal(C.allows(neu, off(dx, dy)), C.allows(alt, off(dx, dy)), `an ${dx},${dy}`);
+  }
+  // Umrisse: jedes Stück einmal, die gewählte Linie kräftig
+  const umriss = C.outline(neu);
+  assert.equal(umriss.length, 4);
+  assert.equal(umriss.filter((o) => o.strong).length, 2);
+});
