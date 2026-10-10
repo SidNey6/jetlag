@@ -10,6 +10,7 @@ export function emptyState() {
     settings: {
       maskOpacity: 0.62,
       tileUrl: '',
+      regionMap: true,     // vorgebaute Vektorkarte in Regionen statt OSM-Kacheln
       keepAwake: true,
       radiusRings: [500, 1000, 2000],
       overpassTimeout: 25,

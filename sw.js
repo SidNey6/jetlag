@@ -2,9 +2,10 @@
 // Cache bedienen, Overpass niemals cachen (veraltete Geodaten wären schlimmer als
 // eine ehrliche Fehlermeldung).
 
-const VERSION = 'v1.9.1';
+const VERSION = 'v1.10.0';
 const APP_CACHE = `jetlag-app-${VERSION}`;
 const TILE_CACHE = 'jetlag-tiles-v1';
+const REGION_CACHE = 'jetlag-region-v1';   // wie in js/region.js
 
 const SHELL = [
   './',
@@ -56,6 +57,8 @@ const SHELL = [
   './vendor/leaflet/images/layers.png',
   './vendor/leaflet/images/layers-2x.png',
   './vendor/qrcode/qrcode.js',
+  './vendor/protomaps-leaflet/protomaps-leaflet.js',
+  './vendor/protomaps-leaflet/LICENSE',
   './assets/icons/icon-192.png',
   './assets/icons/icon-512.png',
   './assets/icons/icon-maskable-512.png',
@@ -89,6 +92,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
   if (event.data?.type === 'VERSION') event.source?.postMessage({ type: 'VERSION', version: VERSION });
+  if (event.data?.type === 'MAP_CHANGED') mapBlobs.clear();
 });
 
 self.addEventListener('fetch', (event) => {
@@ -119,6 +123,13 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin !== location.origin) return;
 
+  // Vorgebaute Karte: die Kartenbibliothek fragt einzelne Bytebereiche an. Liegt die
+  // Datei auf dem Gerät, werden sie hier herausgeschnitten – sonst geht es ans Netz.
+  if (url.pathname.includes('/data/') && url.pathname.endsWith('.pmtiles')) {
+    event.respondWith(serveMap(req));
+    return;
+  }
+
   // Regionsdaten verwaltet region.js selbst (eigener Cache, versionierte Adressen)
   if (url.pathname.includes('/data/')) return;
 
@@ -146,6 +157,41 @@ self.addEventListener('fetch', (event) => {
     return hit || (await network) || Response.error();
   })());
 });
+
+// Geöffnete Kartendateien bleiben im Speicher; Blob-Ausschnitte kosten dann nichts mehr
+const mapBlobs = new Map();
+
+async function serveMap(req) {
+  let blob = mapBlobs.get(req.url);
+  if (!blob) {
+    const hit = await (await caches.open(REGION_CACHE)).match(req.url);
+    if (!hit) return fetch(req);
+    blob = await hit.blob();
+    mapBlobs.clear();
+    mapBlobs.set(req.url, blob);
+  }
+  const size = blob.size;
+  const range = /^bytes=(\d*)-(\d*)$/.exec((req.headers.get('Range') || '').trim());
+  if (!range) {
+    return new Response(blob, { headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(size), 'Accept-Ranges': 'bytes' } });
+  }
+  let start, end;
+  if (range[1] === '') { start = Math.max(0, size - Number(range[2])); end = size - 1; }
+  else { start = Number(range[1]); end = range[2] === '' ? size - 1 : Math.min(Number(range[2]), size - 1); }
+  if (!(start <= end) || start >= size) {
+    return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+  }
+  return new Response(blob.slice(start, end + 1), {
+    status: 206,
+    statusText: 'Partial Content',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(end - start + 1),
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Accept-Ranges': 'bytes',
+    },
+  });
+}
 
 function TRANSPARENT_PNG() {
   const b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';

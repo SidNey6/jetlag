@@ -72,6 +72,14 @@ jobs:
             done
             node --max-old-space-size=6144 scripts/region/build.mjs "$region" $args
           done
+      # Kartenbild aus der Protomaps-Tageskarte; fällt es aus, zeigt die App OSM-Kacheln
+      - name: Regionskarte schneiden
+        if: steps.cache.outputs.cache-hit != 'true' && steps.download.outcome == 'success'
+        continue-on-error: true
+        run: |
+          for region in $(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(Object.keys(REGIONS).join(' '))"); do
+            node scripts/region/basemap.mjs "$region"
+          done
       - name: Daten vorhanden?
         run: test -f data/regions.json && du -sh data
       - uses: actions/upload-artifact@v4

@@ -7,13 +7,19 @@ import * as C from './constraints.js';
 import * as Loc from './location.js';
 import { distance, bearing, formatDistance, formatBearing } from './geo.js';
 import { el, toast } from './ui/ui.js';
+import * as Region from './region.js';
 
 const DEFAULT_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+const VECTOR_ATTRIB = '<a href="https://protomaps.com">Protomaps</a>';   // OSM nennt schon die Rasterebene
+// Ab dieser Zoomstufe zeigt eine Region ihre vorgebaute Karte; darunter (Landesübersicht)
+// bleibt es bei den OSM-Kacheln, sonst stünde ein fremd gestalteter Fleck mitten im Land
+const VECTOR_MIN_ZOOM = 10;
 
 let map = null;
 let mask = null;
 let tileLayer = null;
+let vectorLayers = [];    // je Region mit vorgebauter Karte eine Ebene
 const layers = {};
 let meMarker = null, meAccuracy = null;
 let follow = true;
@@ -77,15 +83,78 @@ export function initMap() {
   return map;
 }
 
+// Rasterkacheln überall dort, wo keine vorgebaute Karte liegt. Kacheln, die ganz in einer
+// Region mit eigener Karte liegen, werden gar nicht erst angefragt.
+let RasterLayer = null;
+function rasterClass() {
+  if (!RasterLayer) {
+    RasterLayer = L.TileLayer.extend({
+      _isValidTile(coords) {
+        if (!L.TileLayer.prototype._isValidTile.call(this, coords)) return false;
+        const innen = this.options.skipInside || [];
+        if (!innen.length || coords.z < VECTOR_MIN_ZOOM) return true;
+        const b = this._tileCoordsToBounds(coords);
+        return !innen.some((r) => b.getSouth() >= r.south && b.getNorth() <= r.north && b.getWest() >= r.west && b.getEast() <= r.east);
+      },
+    });
+  }
+  return RasterLayer;
+}
+
+function mapRegions() {
+  const st = getState().settings;
+  if (st.regionMap === false || typeof protomapsL === 'undefined') return [];
+  return Region.listRegions().filter(Region.hasMap);
+}
+
 export function setTileSource(url) {
   if (tileLayer) tileLayer.remove();
-  tileLayer = L.tileLayer(url || DEFAULT_TILES, {
+  const Raster = rasterClass();
+  tileLayer = new Raster(url || DEFAULT_TILES, {
     maxZoom: 19,
     crossOrigin: 'anonymous',
     attribution: ATTRIB,
     className: 'jl-tiles',
+    zIndex: 1,
+    skipInside: mapRegions().map((r) => r.bounds),
   }).addTo(map);
-  if (layers.area) tileLayer.bringToBack();
+  refreshBaseMap();
+}
+
+// Vorgebaute Regionskarten (Vektorkacheln aus einer PMTiles-Datei, siehe region.js):
+// aufrufen, sobald das Regionsverzeichnis da ist oder sich die Einstellung ändert.
+export function refreshBaseMap() {
+  if (!map) return;
+  const regionen = mapRegions();
+  const sig = regionen.map((r) => `${r.id}@${r.map.version}`).join(',');
+  if (refreshBaseMap.sig !== sig) {
+    refreshBaseMap.sig = sig;
+    for (const l of vectorLayers) l.remove();
+    vectorLayers = regionen.map((r) => {
+      const b = r.bounds;
+      return protomapsL.leafletLayer({
+        url: Region.mapUrl(r),
+        flavor: 'light',
+        lang: 'de',
+        maxDataZoom: r.map.maxZoom || 14,
+        minZoom: VECTOR_MIN_ZOOM,
+        maxZoom: 20,
+        bounds: L.latLngBounds([b.south, b.west], [b.north, b.east]),
+        attribution: VECTOR_ATTRIB,
+        className: 'jl-tiles jl-vector',
+        zIndex: 2,
+      }).addTo(map);
+    });
+  }
+  // Rasterebene: Regionen mit eigener Karte aussparen
+  if (tileLayer) {
+    const innen = regionen.map((r) => r.bounds);
+    const alt = JSON.stringify(tileLayer.options.skipInside || []);
+    if (alt !== JSON.stringify(innen)) {
+      tileLayer.options.skipInside = innen;
+      tileLayer.redraw();
+    }
+  }
 }
 
 export function tileTemplate() {

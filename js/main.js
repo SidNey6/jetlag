@@ -19,7 +19,7 @@ import { initRegions } from './region.js';
 import { el, clear, openSheet, promptSheet, toast, icon, row } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.9.1';
+window.__JL_VERSION__ = 'v1.10.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -245,7 +245,8 @@ function boot() {
 
   // Offline-Vorrat und vorgebaute Regionen kennen, bevor die erste Abfrage losläuft
   initBundle().catch(() => {});
-  initRegions().catch(() => {});
+  // Sobald das Regionsverzeichnis da ist: vorgebaute Karten einblenden
+  initRegions().then(() => MapMod.refreshBaseMap()).catch(() => {});
   Endgame.initEndgame();
 
   // Regelwerk nachladen; die Oberfläche läuft auch an, bevor es da ist

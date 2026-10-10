@@ -13,6 +13,10 @@ import { bundlePut, setBundleMeta, areaCenter, areaRadius } from './bundle.js';
 import { tileList, downloadTiles } from './tiles.js';
 import * as Rules from './rules.js';
 import * as Region from './region.js';
+import { getState } from './state.js';
+
+// Unterhalb dieser Zoomstufe bleibt es auch in Regionen bei OSM-Kacheln (siehe map.js)
+const VECTOR_MIN_ZOOM = 10;
 
 const PAUSE_MS = 900;
 
@@ -94,6 +98,20 @@ export function regionFor(area) {
   return b ? Region.regionForBounds(expand(b, 2000)) : null;
 }
 
+// Region, deren vorgebaute Karte das ganze Spielgebiet zeigt – dann wird statt Hunderter
+// Kacheln eine einzige Datei geladen
+export function mapRegionFor(area) {
+  if (getState().settings.regionMap === false) return null;
+  const b = areaBounds(area);
+  const r = b ? Region.regionForBounds(expand(b, 1000)) : null;
+  return Region.hasMap(r) ? r : null;
+}
+
+// Übersichtskacheln unterhalb der Regionskarte: nur eine Handvoll
+function overviewTiles(bounds) {
+  return tileList(bounds, 6, VECTOR_MIN_ZOOM - 1, 200);
+}
+
 export function planSteps(area, { withTiles = true, zoomExtra = 3, withStreets = true } = {}) {
   const { pois, refs, adminLevels, elevation } = neededSources();
   const region = regionFor(area);
@@ -104,6 +122,7 @@ export function planSteps(area, { withTiles = true, zoomExtra = 3, withStreets =
     regionBytes: region ? Region.bytesFor(region, regionFiles) : 0,
     schritte: osmSchritte + (elevation ? 1 : 0) + (withTiles ? 1 : 0),
     kacheln: withTiles ? estimateTiles(area, zoomExtra) : 0,
+    karte: withTiles ? mapRegionFor(area) : null,
   };
 }
 
@@ -139,13 +158,13 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
   const gesamt = (region ? 1 : pois.length + refs.length + adminLevels.length + 1) + (elevation ? 1 : 0) + (withTiles ? 1 : 0);
   let erledigt = 0;
   const fehler = [];
-  const zaehler = { pois: 0, refs: 0, orte: 0, gebiete: 0, hoehe: 0, kacheln: 0, region: 0 };
+  const zaehler = { pois: 0, refs: 0, orte: 0, gebiete: 0, hoehe: 0, kacheln: 0, region: 0, karte: 0 };
 
   // Kartenkacheln kommen von einem anderen Server als die Ortsdaten – deshalb gleich zu
   // Beginn starten und parallel laufen lassen, statt hinterher. Der Fortschritt zählt
   // den Kachelanteil anteilig mit.
   let kacheln = { done: 0, total: 0 };
-  const kachelText = () => (kacheln.total && kacheln.done < kacheln.total ? ` · Karte ${kacheln.done} / ${kacheln.total}` : '');
+  let kachelText = () => (kacheln.total && kacheln.done < kacheln.total ? ` · Karte ${kacheln.done} / ${kacheln.total}` : '');
   const stand = () => erledigt + (withTiles && kacheln.total ? kacheln.done / kacheln.total : 0);
   let letzterText = '';
   const melde = (text) => { letzterText = text; onProgress({ erledigt: Math.min(stand(), gesamt), gesamt, text: text + kachelText() }); };
@@ -153,7 +172,21 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
   const weiter = () => { erledigt++; };
 
   let kachelLauf = null;
-  if (withTiles && !signal?.aborted) {
+  const karte = withTiles ? mapRegionFor(area) : null;
+  if (karte && !signal?.aborted) {
+    // Vorgebaute Regionskarte: eine Datei, ein Abruf – dazu die paar Übersichtskacheln
+    const mb = (b) => (b / 1048576).toFixed(1).replace('.', ',');
+    kacheln = { done: 0, total: karte.map.bytes };
+    kachelText = () => (kacheln.done < kacheln.total ? ` · Karte ${mb(kacheln.done)} / ${mb(kacheln.total)} MB` : '');
+    kachelLauf = Promise.all([
+      Region.downloadMap(karte, {
+        signal,
+        onProgress: (done, total) => { kacheln = { done, total }; melde(letzterText || 'Karte'); },
+      }).then((res) => { zaehler.karte = res.bytes; }),
+      downloadTiles(overviewTiles(bounds), () => {}, signal || new AbortController().signal)
+        .then((res) => { zaehler.kacheln = res.done - res.failed; }),
+    ]).catch((e) => { if (!signal?.aborted) fehler.push(`Karte: ${e.message || e}`); });
+  } else if (withTiles && !signal?.aborted) {
     const z = zoomForArea(area);
     const liste = tileList(bounds, Math.max(1, z - 1), Math.min(19, z + zoomExtra), 4000);
     kacheln = { done: 0, total: liste.length };
@@ -260,10 +293,10 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
     weiter();
   }
 
-  // Auf die Kacheln warten, die parallel geladen werden
+  // Auf die Karte warten, die parallel geladen wird
   if (kachelLauf) {
     if (erledigt < gesamt - 1) erledigt = gesamt - 1;
-    melde('Kartenkacheln');
+    melde(karte ? 'Karte' : 'Kartenkacheln');
     await kachelLauf;
     weiter();
   }
@@ -272,6 +305,7 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
     area,
     at: Date.now(),
     region: region ? { id: region.id, name: region.name, version: region.version } : null,
+    karte: karte ? { id: karte.id, version: karte.map.version, bytes: karte.map.bytes } : null,
     regelwerk: Rules.getRules()?.name || null,
     kategorien: pois,
     bezugsobjekte: refs.map((r) => bundleKey(r.id, r.params)),

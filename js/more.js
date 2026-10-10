@@ -16,7 +16,7 @@ import { openShareSheet, openImportSheet } from './share.js';
 import { openTilesSheet, clearTileCache, cacheStats } from './tiles.js';
 import { bundleMeta, bundleStats, clearBundle } from './bundle.js';
 import { prepareArea, planSteps, estimateTiles, regionFor } from './prefetch.js';
-import { listRegions, cachedCount, REGION_CACHE } from './region.js';
+import { listRegions, cachedCount, REGION_CACHE, hasMap, mapStored, downloadMap, forgetMaps } from './region.js';
 import { exportText } from './rounds.js';
 import * as Rules from './rules.js';
 import * as Endgame from './endgame.js';
@@ -114,6 +114,7 @@ function settingsPage(host) {
   const set = (fn, label = null) => update((x) => fn(x.settings), label);
 
   const kacheln = st.tileUrl ? 'eigene' : 'OpenStreetMap';
+  const regionKarten = listRegions().filter(hasMap);
   const meter = (list) => list.map((m) => formatDistance(m)).join(', ');
   const notif = !('Notification' in window) ? 'nicht verfügbar'
     : Notification.permission === 'granted' ? 'erlaubt'
@@ -142,7 +143,12 @@ function settingsPage(host) {
           render();
           toast('Kartenquelle gesetzt', 'ok');
         },
-      })),
+      }),
+      regionKarten.length ? row({
+        icon: 'mapPinned', title: 'Vorgebaute Regionskarte',
+        sub: `In ${regionKarten.map((r) => r.name).join(', ')} statt der Kartenquelle – lädt schneller und offline in einem Stück`,
+        control: toggleSwitch(st.regionMap !== false, (v) => { set((x) => { x.regionMap = v; }); MapMod.setTileSource(getState().settings.tileUrl); }),
+      }) : null),
     group('Fragen',
       row({
         icon: 'ring', title: 'Radius-Vorgaben', sub: meter(s.presets.radius),
@@ -622,7 +628,7 @@ async function offlinePage(host) {
   const s = getState();
   const slot = el('div', { class: 'list' }, row({ icon: 'offline', title: 'Bestand wird gezählt …' }));
   host.append(
-    el('div', { class: 'hint', text: 'Lädt Orte, Grenzen, Bezugsgeometrien und Kartenkacheln für das Spielgebiet einmal herunter. Danach läuft die Runde ohne Netz.' }),
+    el('div', { class: 'hint', text: 'Lädt Orte, Grenzen, Bezugsgeometrien und die Karte für das Spielgebiet einmal herunter. Danach läuft die Runde ohne Netz.' }),
     slot,
     group('Herunterladen',
       row({
@@ -636,16 +642,33 @@ async function offlinePage(host) {
   // Vorgebaute Regionsdaten: welche Regionen es gibt, wie aktuell, was schon auf dem Gerät ist
   const regionen = listRegions();
   if (regionen.length) {
-    const zeilen = await Promise.all(regionen.map(async (r) => {
+    const zeilen = (await Promise.all(regionen.map(async (r) => {
       const anzahl = Object.keys(r.files).length;
       const hier = await cachedCount(r);
-      return row({
+      const daten = row({
         icon: 'mapPinned', title: r.name,
         sub: `Stand ${new Date(r.built).toLocaleDateString('de-DE')} · ${hier} von ${anzahl} Dateien auf dem Gerät`,
       });
-    }));
+      if (!hasMap(r)) return [daten];
+      const liegt = await mapStored(r);
+      const karte = row({
+        icon: 'map', title: `Karte ${r.name}`,
+        sub: liegt ? `Auf dem Gerät · ${formatBytes(r.map.bytes)}` : `${formatBytes(r.map.bytes)} · tippen zum Herunterladen`,
+        onClick: liegt ? null : async () => {
+          const sub = karte.querySelector('.row-sub');
+          try {
+            await downloadMap(r, { onProgress: (d, t) => { if (sub) sub.textContent = `Lädt … ${Math.round((d / t) * 100)} %`; } });
+            toast('Karte liegt jetzt auf dem Gerät', 'ok');
+          } catch (e) {
+            toast(`Karte nicht geladen: ${e.message || e}`, 'error');
+          }
+          render();
+        },
+      });
+      return [daten, karte];
+    }))).flat();
     host.insertBefore(group('Vorgebaute Regionen', ...zeilen), slot);
-    host.insertBefore(el('div', { class: 'hint', text: 'In diesen Regionen beantwortet die App Ortsfragen ohne Overpass. Einmal abgerufene Dateien bleiben auf dem Gerät; „Spielgebiet vorbereiten" holt alle auf einmal.' }), slot);
+    host.insertBefore(el('div', { class: 'hint', text: 'In diesen Regionen beantwortet die App Ortsfragen ohne Overpass, und die Karte kommt als eine fertige Datei statt Kachel für Kachel. Einmal abgerufene Dateien bleiben auf dem Gerät; „Spielgebiet vorbereiten" holt alle auf einmal.' }), slot);
   }
 
   const [kacheln, vorrat] = await Promise.all([cacheStats(), bundleStats()]);
@@ -654,6 +677,7 @@ async function offlinePage(host) {
     const z = meta.zaehler || {};
     slot.append(
       meta.region ? row({ title: 'Regionsdaten', value: `${meta.region.name} · ${z.region || 0} Dateien` }) : null,
+      meta.karte ? row({ title: 'Karte', value: formatBytes(meta.karte.bytes) }) : null,
       meta.region ? null : row({ title: 'Orte', value: String(z.pois || 0) }),
       meta.region ? null : row({ title: 'Geometrien', value: String(z.refs || 0) }),
       meta.region ? null : row({ title: 'Gebiete', value: `${z.orte || 0}${z.gebiete ? ` · ${z.gebiete} Umrisse` : ''}` }),
@@ -671,12 +695,14 @@ async function offlinePage(host) {
           : 'Unterwegs braucht jede Frage dann Empfang',
     }));
   }
-  if (meta || kacheln.count) {
+  const regionVorrat = 'caches' in window && (await caches.has(REGION_CACHE));
+  if (meta || kacheln.count || regionVorrat) {
     host.append(group(null, row({
       icon: 'trash', title: 'Vorrat löschen', danger: true,
       onClick: async () => {
         if (!(await confirmSheet('Offline-Vorrat löschen?', 'Karten und vorgeladene Daten werden entfernt.', { danger: true, okLabel: 'Löschen' }))) return;
         await Promise.all([clearBundle(), clearTileCache(), caches.delete(REGION_CACHE)]);
+        forgetMaps();
         render();
         toast('Vorrat geleert', 'ok');
       },
@@ -698,11 +724,23 @@ function openPrepareSheet() {
     const bar = el('div', { class: 'progress' }, el('i', { style: { width: '0%' } }));
     const status = el('div', { class: 'hint' });
     const detail = el('input', { type: 'range', min: '1', max: '5', value: String(zoomExtra) });
+    const detailFeld = el('label', { class: 'field' }, 'Kartendetail', detail);
 
-    function refresh() {
+    async function refresh() {
       const p = planSteps(area, { withTiles, zoomExtra, withStreets });
       const k = withTiles ? estimateTiles(area, zoomExtra) : 0;
       const kachelnMb = Math.round(k * 18 / 1024);
+      detailFeld.hidden = !!p.karte;
+      if (p.karte) {
+        const liegt = await mapStored(p.karte);
+        info.textContent = `Regionsdaten ${p.region ? `${p.regionFiles.length} Dateien, ${formatBytes(p.regionBytes)} unkomprimiert` : '–'}`
+          + (p.elevation ? ' · Geländehöhen' : '')
+          + ` · Karte ${p.karte.name}: ${liegt ? 'liegt schon auf dem Gerät' : `${formatBytes(p.karte.map.bytes)} in einer Datei`}`;
+        // Alles parallel; die Karte ist der größte Brocken (bei ~2 MB/s mobil)
+        const sekunden = Math.max(p.regionFiles.length / 10 * 0.25 + (p.elevation ? 3 : 0), liegt ? 0 : p.karte.map.bytes / 2e6);
+        status.textContent = `Dauer grob ${sekunden < 60 ? `${Math.max(5, Math.round(sekunden / 5) * 5)} Sekunden` : `${Math.round(sekunden / 60)} Minuten`}, je nach Empfang. Alles kommt aus dem vorgebauten Auszug – weder Overpass noch OpenStreetMap-Kachelserver.`;
+        return;
+      }
       if (p.region) {
         info.textContent = `Regionsdaten ${p.region.name}: ${p.regionFiles.length} Dateien, ${formatBytes(p.regionBytes)} unkomprimiert`
           + (p.elevation ? ' · Geländehöhen' : '')
@@ -728,12 +766,12 @@ function openPrepareSheet() {
         ? `Das Spielgebiet liegt in der Region „${region.name}". Orte, Linien, Grenzen und Straßen liegen dort fertig vor und werden nur auf das Gerät geholt, dazu die Karte selbst.`
         : 'Holt alles, was die Fragen später brauchen: Orte je Kategorie, Geometrie der Bezugsobjekte, Orts- und Grenzliste, dazu die Karte selbst.' }),
       el('div', { class: 'list' },
-        row({ icon: 'map', title: 'Kartenkacheln mitladen', control: toggleSwitch(withTiles, (v) => { withTiles = v; refresh(); }) }),
+        row({ icon: 'map', title: 'Karte mitladen', control: toggleSwitch(withTiles, (v) => { withTiles = v; refresh(); }) }),
         region ? row({
           icon: 'footprints', title: 'Straßennetz fürs Endgame', sub: 'Damit das Endgame auch im Funkloch startet',
           control: toggleSwitch(withStreets, (v) => { withStreets = v; refresh(); }),
         }) : null),
-      el('label', { class: 'field' }, 'Kartendetail', detail),
+      detailFeld,
       info, bar, status,
     );
     refresh();
@@ -749,7 +787,7 @@ function openPrepareSheet() {
             withTiles, zoomExtra, withStreets, signal: controller.signal,
             onProgress: ({ erledigt, gesamt, text }) => {
               bar.firstChild.style.width = `${(erledigt / gesamt) * 100}%`;
-              status.textContent = `${erledigt} / ${gesamt} · ${text}`;
+              status.textContent = `${Math.floor((erledigt / gesamt) * 100)} % · ${text}`;
             },
           });
           close();

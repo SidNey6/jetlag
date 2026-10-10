@@ -31,11 +31,23 @@ createServer(async (req, res) => {
     const info = await stat(file);
     if (!info.isFile()) throw new Error('kein File');
     const body = await readFile(file);
-    res.writeHead(200, {
+    const head = {
       'Content-Type': TYPES[extname(file)] || 'application/octet-stream',
       'Cache-Control': 'no-store',
       'Service-Worker-Allowed': '/',
-    });
+      'Accept-Ranges': 'bytes',
+    };
+    // Bytebereiche wie GitHub Pages – die Regionskarte (PMTiles) braucht sie
+    const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
+    if (range) {
+      const start = Number(range[1]);
+      const end = Math.min(range[2] ? Number(range[2]) : body.length - 1, body.length - 1);
+      if (start > end) { res.writeHead(416, { 'Content-Range': `bytes */${body.length}` }).end(); return; }
+      res.writeHead(206, { ...head, 'Content-Range': `bytes ${start}-${end}/${body.length}`, 'Content-Length': end - start + 1 });
+      res.end(body.subarray(start, end + 1));
+      return;
+    }
+    res.writeHead(200, { ...head, 'Content-Length': body.length });
     res.end(body);
   } catch (e) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('nicht gefunden');

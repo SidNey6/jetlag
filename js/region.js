@@ -55,17 +55,27 @@ async function openCache() {
   try { return 'caches' in globalThis ? await caches.open(REGION_CACHE) : null; } catch (e) { return null; }
 }
 
-// Dateien älterer Datenstände entfernen
+// Dateien älterer Datenstände entfernen (Ortsdaten und Karte haben je eine Version)
 async function cleanup() {
   const cache = await openCache();
   if (!cache) return;
-  const aktuell = new Map(regions.map((r) => [r.id, r.version]));
+  const aktuell = new Map(regions.map((r) => [r.id, new Set([r.version, r.map && r.map.version].filter(Boolean))]));
   for (const req of await cache.keys()) {
     const u = new URL(req.url);
     const m = /\/data\/([^/]+)\//.exec(u.pathname);
     if (!m) continue;
-    if (aktuell.get(m[1]) !== u.searchParams.get('v')) await cache.delete(req);
+    const gueltig = aktuell.get(m[1]);
+    if (!gueltig || !gueltig.has(u.searchParams.get('v'))) {
+      await cache.delete(req);
+      if (u.pathname.endsWith('.pmtiles')) forgetMaps();
+    }
   }
+}
+
+// Der Service Worker hält eine geöffnete Kartendatei im Speicher – nach dem Löschen
+// soll er sie vergessen
+export function forgetMaps() {
+  try { navigator.serviceWorker?.controller?.postMessage({ type: 'MAP_CHANGED' }); } catch (e) { /* egal */ }
 }
 
 /* ---------- Abdeckung ---------- */
@@ -282,4 +292,52 @@ export async function cachedCount(region) {
   if (!cache) return 0;
   const keys = await cache.keys();
   return keys.filter((r) => r.url.includes(`/data/${region.id}/`) && r.url.includes(`v=${region.version}`)).length;
+}
+
+/* ---------- Vorgebaute Karte ---------- */
+// Das Kartenbild der Region als eine PMTiles-Datei (scripts/region/basemap.mjs). Online
+// holt die Karte nur die sichtbaren Bytebereiche; offline liefert der Service Worker sie
+// aus der gespeicherten Datei.
+
+export function hasMap(region) {
+  return !!(region && region.map && region.map.file);
+}
+
+export function mapUrl(region) {
+  return new URL(`${BASE}${region.id}/${region.map.file}?v=${region.map.version}`, globalThis.location?.href || 'http://localhost/').toString();
+}
+
+// Region, deren Karte das Spielgebiet (oder ohne Gebiet: den Kartenmittelpunkt) abdeckt
+export function mapRegionFor(bounds, point) {
+  const r = bounds ? regionForBounds(bounds) : regionAt(point);
+  return hasMap(r) ? r : null;
+}
+
+export async function mapStored(region) {
+  const cache = await openCache();
+  return !!(cache && hasMap(region) && (await cache.match(mapUrl(region))));
+}
+
+// Die ganze Karte in einem Stück auf das Gerät – eine Anfrage statt Hunderter Kacheln
+export async function downloadMap(region, { onProgress = () => {}, signal } = {}) {
+  const cache = await openCache();
+  if (!cache) throw new Error('Kein Cache-Speicher verfügbar');
+  const url = mapUrl(region);
+  if (await cache.match(url)) { onProgress(region.map.bytes, region.map.bytes); return { bytes: region.map.bytes, cached: true }; }
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`Karte: HTTP ${res.status}`);
+  const total = +res.headers.get('Content-Length') || region.map.bytes;
+  const reader = res.body.getReader();
+  const teile = [];
+  let geladen = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    teile.push(value);
+    geladen += value.length;
+    onProgress(geladen, total);
+  }
+  const blob = new Blob(teile, { type: 'application/octet-stream' });
+  await cache.put(url, new Response(blob, { headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(blob.size) } }));
+  return { bytes: blob.size, cached: false };
 }

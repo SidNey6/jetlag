@@ -117,6 +117,26 @@ node scripts/region/build.mjs bonn --pbf koeln-regbez-latest.osm.pbf --pbf rhein
 
 Weitere Regionen kommen als Eintrag in `scripts/region/regions.mjs` dazu.
 
+### Vorgebaute Karte
+
+Auch das Kartenbild liegt für die Region fertig vor: Der Monatslauf schneidet aus der
+täglich gebauten [Protomaps](https://protomaps.com)-Weltkarte (Vektorkacheln aus
+OpenStreetMap-Daten) den Rahmen der Region heraus – Zoom 0 bis 14, rund 25 MB in **einer**
+PMTiles-Datei (`data/<region>/map.pmtiles`). Ab Zoomstufe 10 zeigt die App in der Region
+diese Karte statt der Kacheln von tile.openstreetmap.org:
+
+- **online** holt sie nur die Bytebereiche der sichtbaren Ausschnitte, ohne die
+  Zwei-Verbindungen-Grenze des OSM-Kachelservers;
+- **Vorbereiten** lädt die ganze Datei in einem Abruf; danach schneidet der Service Worker
+  die Ausschnitte aus der gespeicherten Datei heraus – auch im Funkloch.
+
+Außerhalb der Region, unterhalb von Zoom 10 und mit eigener Kartenquelle bleibt es bei
+Rasterkacheln. Ausschalten lässt sich die Regionskarte unter *Mehr → Einstellungen → Karte*.
+
+```bash
+node scripts/region/basemap.mjs bonn   # nach build.mjs; liest nur die nötigen Bytebereiche
+```
+
 ## Offline spielen
 
 Unter *Mehr → Offline-Vorrat → Spielgebiet vorbereiten* lädt die App einmal alles herunter, was
@@ -128,8 +148,9 @@ die Fragen später brauchen:
 - die Kartenkacheln des Gebiets
 
 Liegt das Spielgebiet in einer vorgebauten Region, holt die App stattdessen deren Dateien
-auf das Gerät – für ein Gebiet mit 8 km Radius um Bonn etwa 19 MB, ohne Straßennetz 11 MB,
-in Sekunden statt Minuten.
+auf das Gerät – für ein Gebiet mit 8 km Radius um Bonn etwa 19 MB (unkomprimiert, über die
+Leitung deutlich weniger), ohne Straßennetz 11 MB – und die Karte als eine Datei mit 25 MB.
+Alles läuft parallel und dauert je nach Empfang Sekunden statt Minuten.
 
 Danach beantwortet die App jede Abfrage aus dem eigenen Bestand – im Funkloch, in der
 U-Bahn, ohne Wartezeit. Welche Quellen gebraucht werden, leitet sie aus dem aktiven
@@ -319,7 +340,7 @@ damit installierte Geräte das Update ziehen.
 
 ```
 index.html          App-Shell mit fünf Tabs
-sw.js               Service Worker: App offline, Kacheln aus dem Cache
+sw.js               Service Worker: App offline, Kacheln und Kartenbereiche aus dem Cache
 rules/lifack.json   Regelwerk: Spielgrößen, Fristen, Fragekategorien, Deck
 rules/SCHEMA.md     Referenz des Regelformats
 js/rules.js         Regelwerk laden, prüfen, nach Spielgröße filtern
@@ -334,7 +355,7 @@ js/map.js           Leaflet, Marker, Messwerkzeug, Punktauswahl
 js/questions.js     Dialoge zum Anlegen und Verwalten der Fragen
 js/overpass.js      OpenStreetMap-Abfragen: erst Regionsdaten, dann Vorrat, dann Overpass
 js/osmgeo.js        OSM-Elemente zu Punkten, Linien, Flächen (für App und Bau-Skript)
-js/region.js        Vorgebaute Regionsdaten lesen, cachen, vorladen
+js/region.js        Vorgebaute Regionsdaten und -karte lesen, cachen, vorladen
 js/endgame.js       Endgame: Zone, Streckenaufzeichnung, Taschenmodus, GPX
 js/streets.js       Straßennetz, abgelaufene Stücke, kürzester Weg
 js/timers.js        Timer-Engine auf Zeitstempelbasis
@@ -345,7 +366,7 @@ js/bundle.js        Ablage der vorab geladenen Gebietsdaten
 js/prefetch.js      Spielgebiet vorbereiten: sammelt alles Nötige ein
 js/state.js         Zustand, Persistenz, Undo
 js/compute.js       Raster und Restfläche im Hintergrund-Thread (js/worker.js)
-scripts/region/     Regionsdaten bauen: PBF-Leser, Bau-Skript, Regionen
+scripts/region/     Regionsdaten bauen: PBF-Leser, Bau-Skript, Regionen, Kartenausschnitt (PMTiles)
 ```
 
 Drei Entscheidungen, die den Rest erklären:
@@ -371,7 +392,9 @@ Drei Entscheidungen, die den Rest erklären:
 - Alle Daten bleiben auf dem Gerät (localStorage und Cache Storage). Geteilt wird nur,
   was ihr aktiv per Link oder QR weitergebt.
 - Regionsdaten © OpenStreetMap-Mitwirkende, Lizenz ODbL; Auszüge von
-  [Geofabrik](https://download.geofabrik.de).
+  [Geofabrik](https://download.geofabrik.de). Regionskarte aus den Tageskarten von
+  [Protomaps](https://protomaps.com) (Daten © OpenStreetMap-Mitwirkende, ODbL).
 - Enthaltene Fremdsoftware: [Leaflet](https://leafletjs.com) (BSD-2-Clause),
+  [protomaps-leaflet](https://github.com/protomaps/protomaps-leaflet) (BSD-3-Clause),
   [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT) und
   Symbole von [Lucide](https://lucide.dev) (ISC), jeweils unter `vendor/` mit Lizenztext.
