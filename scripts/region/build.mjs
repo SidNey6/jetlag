@@ -410,7 +410,7 @@ function buildAreas(elements, region, geoms) {
     if (!c) continue;
     if (e.type !== 'node') {
       const ring = ringOf(e);
-      if (ring) geoms.set(`geom/${e.type}-${e.id}`, { c: flat(G.slimRing(ring)) });
+      if (ring) geoms.set(`${e.type}-${e.id}`, flat(G.slimRing(ring)));
       else c.hasGeometry = false;
       c.tier = G.areaTier(c);
     }
@@ -495,13 +495,14 @@ export function buildRegion({ region, pbf, out, quiet = false }) {
     const data = files.get(o.id);
     if (data) counts[o.id] = (data.items || data.features || data.lines || []).length;
   }
-  for (const [k, v] of geoms) files.set(k, v);
+  // Alle Gebietsumrisse in einer Datei: eine Anfrage statt Hunderter beim Vorbereiten
+  if (geoms.size) files.set('geoms', { rings: Object.fromEntries(geoms) });
   // Leere Dateien weglassen, aber vermerken: "gibt es in der Region nicht" (keine
   // U-Bahn in Bonn) ist eine Antwort – bei Fragen mit mehreren Quellen muss die App
   // dafür nicht online nachsehen
   const leer = [];
   for (const [k, v] of files) {
-    const n = (v.items || v.features || v.lines || v.ways || [v.c]).length;
+    const n = (v.items || v.features || v.lines || v.ways || (v.rings ? Object.keys(v.rings) : null) || [v.c]).length;
     if (!n) { files.delete(k); leer.push(k); }
   }
 
@@ -541,7 +542,7 @@ export function buildRegion({ region, pbf, out, quiet = false }) {
   const mb = (x) => `${(x / 1048576).toFixed(1)} MB`;
   const nach = (pref) => Object.entries(sizes).filter(([k]) => k.startsWith(pref)).reduce((s, [, v]) => s + v, 0);
   log(`Fertig: ${files.size} Dateien, ${mb(total)} (Straßen ${mb(nach('streets/'))}, Bezüge ${mb(nach('refs/'))}, `
-    + `Orte ${mb(nach('pois/'))}, Grenzen ${mb(nach('admin/'))}, Gebiete ${mb(nach('areas') + nach('geom/'))}), Version ${version}`);
+    + `Orte ${mb(nach('pois/'))}, Grenzen ${mb(nach('admin/'))}, Gebiete ${mb(nach('areas') + nach('geoms'))}), Version ${version}`);
   if (!quiet) for (const [k, v] of Object.entries(counts).sort()) if (v) console.log(`  ${k.padEnd(36)} ${String(v).padStart(6)}`);
   return manifest;
 }

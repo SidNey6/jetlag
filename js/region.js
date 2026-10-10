@@ -172,6 +172,7 @@ export function decode(path, data) {
     return data.items.map((a) => ({ id: a.id, name: a.name, level: a.level, ring: unflat(a.c) }));
   }
   if (path.startsWith('geom/')) return unflat(data.c);
+  if (path === 'geoms') return data.rings;
   if (path.startsWith('streets/')) {
     return data.ways.map((w) => {
       const pts = [];
@@ -223,10 +224,19 @@ export async function regionStreets(region, center, radiusM) {
 /* ---------- Vorabladen ---------- */
 
 // Alle Dateien, die ein Spielgebiet braucht, in den Cache holen – danach geht es offline.
+// Umriss eines Gebiets (Gebietsauswahl). Neue Datenstände bündeln alle in "geoms",
+// ältere hatten je Gebiet eine Datei.
+export async function areaRing(region, type, id) {
+  if (has(region, 'geoms')) {
+    const rings = await regionTry(region, 'geoms');
+    const c = rings && rings[`${type}-${id}`];
+    return c ? unflat(c) : null;
+  }
+  return regionTry(region, `geom/${type}-${id}`);
+}
+
 export function filesFor(region, bounds, { streets = true } = {}) {
-  const paths = Object.keys(region.files).filter((p) => !p.startsWith('streets/') && !p.startsWith('geom/'));
-  // Gebietsumrisse nur, wenn sie das Spielgebiet betreffen könnten: alle (klein)
-  paths.push(...Object.keys(region.files).filter((p) => p.startsWith('geom/')));
+  const paths = Object.keys(region.files).filter((p) => !p.startsWith('streets/'));
   if (streets && region.streets) {
     paths.push(...streetTilesIn(bounds, region.streets.tile).map((k) => `streets/${k}`).filter((p) => has(region, p)));
   }
@@ -261,7 +271,9 @@ export async function warm(region, paths, { onProgress = () => {}, signal } = {}
       onProgress(done, paths.length);
     }
   };
-  await Promise.all([worker(), worker(), worker(), worker()]);
+  // Eigene statische Dateien über HTTP/2: zehn gleichzeitig sind für GitHub Pages kein
+  // Problem und verkürzen vor allem auf Mobilfunk die Wartezeit erheblich
+  await Promise.all(Array.from({ length: Math.min(10, paths.length) }, worker));
   return { done, failed };
 }
 

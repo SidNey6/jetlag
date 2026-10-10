@@ -141,8 +141,29 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
   const fehler = [];
   const zaehler = { pois: 0, refs: 0, orte: 0, gebiete: 0, hoehe: 0, kacheln: 0, region: 0 };
 
-  const schritt = (text) => onProgress({ erledigt, gesamt, text });
+  // Kartenkacheln kommen von einem anderen Server als die Ortsdaten – deshalb gleich zu
+  // Beginn starten und parallel laufen lassen, statt hinterher. Der Fortschritt zählt
+  // den Kachelanteil anteilig mit.
+  let kacheln = { done: 0, total: 0 };
+  const kachelText = () => (kacheln.total && kacheln.done < kacheln.total ? ` · Karte ${kacheln.done} / ${kacheln.total}` : '');
+  const stand = () => erledigt + (withTiles && kacheln.total ? kacheln.done / kacheln.total : 0);
+  let letzterText = '';
+  const melde = (text) => { letzterText = text; onProgress({ erledigt: Math.min(stand(), gesamt), gesamt, text: text + kachelText() }); };
+  const schritt = (text) => melde(text);
   const weiter = () => { erledigt++; };
+
+  let kachelLauf = null;
+  if (withTiles && !signal?.aborted) {
+    const z = zoomForArea(area);
+    const liste = tileList(bounds, Math.max(1, z - 1), Math.min(19, z + zoomExtra), 4000);
+    kacheln = { done: 0, total: liste.length };
+    kachelLauf = downloadTiles(liste, (done, total) => {
+      kacheln = { done, total };
+      melde(letzterText || 'Kartenkacheln');
+    }, signal || new AbortController().signal)
+      .then((res) => { zaehler.kacheln = res.done - res.failed; })
+      .catch((e) => { fehler.push(`Kacheln: ${e.message || e}`); });
+  }
 
   // Vorgebaute Regionsdaten: ein paar Megabyte statischer Dateien statt dutzender
   // Overpass-Abfragen
@@ -152,7 +173,7 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
     try {
       const res = await Region.warm(region, paths, {
         signal,
-        onProgress: (d, t) => onProgress({ erledigt, gesamt, text: `Regionsdaten ${d} / ${t}` }),
+        onProgress: (d, t) => melde(`Regionsdaten ${d} / ${t}`),
       });
       zaehler.region = res.done - res.failed;
       if (res.failed) fehler.push(`Regionsdaten: ${res.failed} Dateien nicht geladen`);
@@ -239,18 +260,11 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
     weiter();
   }
 
-  // Kartenkacheln
-  if (withTiles && !signal?.aborted) {
-    const z = zoomForArea(area);
-    const liste = tileList(bounds, Math.max(1, z - 1), Math.min(19, z + zoomExtra), 4000);
-    try {
-      const res = await downloadTiles(liste, (done, total) => {
-        onProgress({ erledigt, gesamt, text: `Kartenkacheln ${done} / ${total}` });
-      }, signal || new AbortController().signal);
-      zaehler.kacheln = res.done - res.failed;
-    } catch (e) {
-      fehler.push(`Kacheln: ${e.message || e}`);
-    }
+  // Auf die Kacheln warten, die parallel geladen werden
+  if (kachelLauf) {
+    if (erledigt < gesamt - 1) erledigt = gesamt - 1;
+    melde('Kartenkacheln');
+    await kachelLauf;
     weiter();
   }
 

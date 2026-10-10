@@ -194,7 +194,8 @@ test('Bau-Skript: Orte, Grenzen, Linien und Straßen aus derselben Quelle', () =
   const areas = read('areas');
   const viertel = areas.find((a) => a.name === 'Testviertel');
   assert.ok(viertel.hasGeometry);
-  assert.ok(existsSync(join(out, 'test', 'geom', 'relation-200.json')));
+  const umrisse = JSON.parse(readFileSync(join(out, 'test', 'geoms.json'), 'utf8')).rings;
+  assert.ok(G.ringClosed(Region.unflat(umrisse['relation-200'])), 'Umriss des Viertels in der Sammeldatei');
   assert.equal(areas.find((a) => a.name === 'Kleinviertel').hasGeometry, false);
 
   // Verzeichnis

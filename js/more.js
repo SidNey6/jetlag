@@ -707,8 +707,9 @@ function openPrepareSheet() {
         info.textContent = `Regionsdaten ${p.region.name}: ${p.regionFiles.length} Dateien, ${formatBytes(p.regionBytes)} unkomprimiert`
           + (p.elevation ? ' · Geländehöhen' : '')
           + (withTiles ? ` · ${k} Kartenkacheln (grob ${kachelnMb} MB)` : '');
-        const sekunden = 10 + (p.elevation ? 5 : 0) + (withTiles ? k / 12 : 0);
-        status.textContent = `Dauer grob ${Math.max(1, Math.round(sekunden / 60))} Minute(n). Ortsdaten kommen aus dem vorgebauten Auszug, ohne Overpass.`;
+        // Regionsdaten (10 gleichzeitig) und Kacheln (2 gleichzeitig) laufen parallel
+        const sekunden = Math.max(p.regionFiles.length / 10 * 0.25 + (p.elevation ? 3 : 0), withTiles ? k / 2 * 0.12 : 0);
+        status.textContent = `Dauer grob ${sekunden < 60 ? `${Math.max(10, Math.round(sekunden / 10) * 10)} Sekunden` : `${Math.round(sekunden / 60)} Minuten`}, je nach Empfang. Ortsdaten kommen aus dem vorgebauten Auszug, ohne Overpass.`;
         return;
       }
       info.textContent = `${p.pois.length} Ortskategorien · ${p.refs.length} Bezugsobjekte`

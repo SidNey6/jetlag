@@ -22,6 +22,8 @@ export const REGIONS = {
   },
 };
 
-// Kachelraster des Straßennetzes: etwa 1,1 × 1,1 km in dieser Breite. Die App liest
-// das Raster aus data/regions.json, der Schlüssel kommt aus js/osmgeo.js.
-export const STREET_TILE = { lat: 0.01, lng: 0.015 };
+// Kachelraster des Straßennetzes: etwa 3,3 × 3,2 km in dieser Breite. Größer heißt
+// weniger Dateien beim Vorbereiten (jede Anfrage kostet auf Mobilfunk spürbar Zeit),
+// kleiner heißt weniger Daten beim Endgame-Start – das hier ist der Mittelweg.
+// Die App liest das Raster aus data/regions.json, der Schlüssel kommt aus js/osmgeo.js.
+export const STREET_TILE = { lat: 0.03, lng: 0.045 };

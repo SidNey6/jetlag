@@ -573,7 +573,7 @@ export async function areaGeometry(cand) {
   await Region.initRegions();
   if (cand.type === 'node') return null;
   const region = Region.regionAt(cand);
-  const ausRegion = region ? await Region.regionTry(region, `geom/${cand.type}-${cand.id}`) : null;
+  const ausRegion = region ? await Region.areaRing(region, cand.type, cand.id) : null;
   if (ausRegion) return ausRegion;
   const ql = `[out:json][timeout:60];${cand.type}(${cand.id});out geom;`;
   const json = await query(ql);

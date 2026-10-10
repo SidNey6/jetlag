@@ -15,8 +15,10 @@ import { tileList } from './tilemath.js';
 export const TILE_CACHE = 'jetlag-tiles-v1';
 export { tileList };
 const MAX_TILES = 2000;
+// Die Nutzungsbedingungen von tile.openstreetmap.org erlauben höchstens zwei
+// gleichzeitige Verbindungen – daran hält sich der Download. Eine zusätzliche Pause
+// nach jeder Kachel verdoppelte nur die Wartezeit.
 const CONCURRENCY = 2;
-const THROTTLE_MS = 60;
 
 export function tileUrl(t) {
   return tileTemplate()
@@ -56,9 +58,8 @@ export async function downloadTiles(tiles, onProgress, signal) {
         const hit = await cache.match(url);
         if (!hit) {
           const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
-          if (res.ok) await cache.put(url, res.clone());
+          if (res.ok) await cache.put(url, res);
           else failed++;
-          await new Promise((r) => setTimeout(r, THROTTLE_MS));
         }
       } catch (e) {
         failed++;
