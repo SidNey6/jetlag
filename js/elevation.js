@@ -4,7 +4,8 @@
 
 import { bundleGet, bundleCovers } from './bundle.js';
 import { areaBounds } from './constraints.js';
-import { distance } from './geo.js';
+import { distance, cropGrid } from './geo.js';
+import * as Region from './region.js';
 
 const API = 'https://api.open-meteo.com/v1/elevation';
 const PRO_ANFRAGE = 100;
@@ -20,8 +21,9 @@ function pause(ms, signal) {
   });
 }
 
-// onWait(sekunden): Bescheid geben, wenn wegen Drosselung gewartet wird
-async function fetchPoints(points, { signal, onWait } = {}) {
+// onWait(sekunden): Bescheid geben, wenn wegen Drosselung gewartet wird;
+// noWait: bei Drosselung sofort aufgeben statt eine Minute zu warten
+async function fetchPoints(points, { signal, onWait, noWait = false } = {}) {
   const out = [];
   for (let i = 0; i < points.length; i += PRO_ANFRAGE) {
     const chunk = points.slice(i, i + PRO_ANFRAGE);
@@ -30,7 +32,7 @@ async function fetchPoints(points, { signal, onWait } = {}) {
     let res;
     for (let versuch = 0; versuch < 3; versuch++) {
       res = await fetch(url, { signal });
-      if (res.status !== 429) break;
+      if (res.status !== 429 || noWait) break;
       // Minutenbudget erschöpft: abwarten statt aufgeben
       if (onWait) onWait(61);
       await pause(61000, signal);
@@ -65,7 +67,7 @@ export function gridSizeFor(bounds) {
   };
 }
 
-export async function fetchElevationGrid(bounds, { signal, onWait } = {}) {
+export async function fetchElevationGrid(bounds, { signal, onWait, noWait } = {}) {
   const { rows, cols } = gridSizeFor(bounds);
   const points = [];
   for (let r = 0; r < rows; r++) {
@@ -74,20 +76,41 @@ export async function fetchElevationGrid(bounds, { signal, onWait } = {}) {
       points.push({ lat, lng: bounds.west + (c / (cols - 1)) * (bounds.east - bounds.west) });
     }
   }
-  const values = await fetchPoints(points, { signal, onWait });
-  return { ...bounds, rows, cols, values };
+  const values = await fetchPoints(points, { signal, onWait, noWait });
+  return { ...bounds, rows, cols, values, source: 'Copernicus-Geländemodell (90 m)' };
+}
+
+// Rahmen mit 5 % Rand, damit auch Punkte knapp außerhalb interpoliert werden können
+function withMargin(b) {
+  const dLat = (b.north - b.south) * 0.05, dLng = (b.east - b.west) * 0.05;
+  return { south: b.south - dLat, north: b.north + dLat, west: b.west - dLng, east: b.east + dLng };
+}
+
+// Raster aus den vorgebauten Regionsdaten, falls die Region das Gebiet abdeckt
+export async function regionGridFor(bounds, maxSide = 64) {
+  const region = Region.regionForBounds(bounds);
+  if (!region || !Region.has(region, 'elevation')) return null;
+  try {
+    const grid = await Region.regionGet(region, 'elevation');
+    return grid ? cropGrid(grid, bounds, maxSide) : null;
+  } catch (e) {
+    return null;   // offline und nicht auf dem Gerät: weiter mit Vorrat oder Online-Dienst
+  }
 }
 
 // Gitter für ein Spielgebiet – aus dem Offline-Vorrat, wenn vorhanden.
+// Reihenfolge: vorgebaute Region → Offline-Vorrat → Online-Höhendienst
 export async function elevationGridFor(area, around = null, { onWait } = {}) {
-  const probe = around || (area ? { lat: (areaBounds(area).south + areaBounds(area).north) / 2, lng: (areaBounds(area).west + areaBounds(area).east) / 2 } : null);
+  const b = area ? areaBounds(area) : null;
+  if (b) {
+    const regional = await regionGridFor(withMargin(b));
+    if (regional) return { ...regional, offline: true };
+  }
+  const probe = around || (b ? { lat: (b.south + b.north) / 2, lng: (b.west + b.east) / 2 } : null);
   if (probe && bundleCovers(probe)) {
     const vorrat = await bundleGet('elevation');
     if (vorrat) return { ...vorrat, offline: true };
   }
-  const b = area ? areaBounds(area) : null;
   if (!b) throw new Error('Für Höhenfragen braucht es ein Spielgebiet');
-  // etwas Rand, damit auch Punkte knapp außerhalb interpoliert werden können
-  const dLat = (b.north - b.south) * 0.05, dLng = (b.east - b.west) * 0.05;
-  return fetchElevationGrid({ south: b.south - dLat, north: b.north + dLat, west: b.west - dLng, east: b.east + dLng }, { onWait });
+  return fetchElevationGrid(withMargin(b), { onWait });
 }

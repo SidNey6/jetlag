@@ -117,6 +117,18 @@ node scripts/region/build.mjs bonn --pbf koeln-regbez-latest.osm.pbf --pbf rhein
 
 Weitere Regionen kommen als Eintrag in `scripts/region/regions.mjs` dazu.
 
+### Vorgebaute Geländehöhen
+
+Für „Bist du näher am Meeresspiegel?" liegt ein Höhenraster der ganzen Region bei
+(~100 m Maschenweite, 0,3 MB komprimiert), gebaut aus den freien
+[Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) auf AWS. In der Region fragt
+die App deshalb nicht mehr beim Online-Höhendienst nach – der drosselt pro IP-Adresse,
+und im Mobilfunk teilen sich viele Geräte eine Adresse.
+
+```bash
+node scripts/region/elevation.mjs bonn   # nach build.mjs
+```
+
 ### Vorgebaute Karte
 
 Auch das Kartenbild liegt für die Region fertig vor: Der Monatslauf schneidet aus der
@@ -366,7 +378,7 @@ js/bundle.js        Ablage der vorab geladenen Gebietsdaten
 js/prefetch.js      Spielgebiet vorbereiten: sammelt alles Nötige ein
 js/state.js         Zustand, Persistenz, Undo
 js/compute.js       Raster und Restfläche im Hintergrund-Thread (js/worker.js)
-scripts/region/     Regionsdaten bauen: PBF-Leser, Bau-Skript, Regionen, Kartenausschnitt (PMTiles)
+scripts/region/     Regionsdaten bauen: PBF-Leser, Bau-Skript, Regionen, Höhenraster, Kartenausschnitt (PMTiles)
 ```
 
 Drei Entscheidungen, die den Rest erklären:
@@ -394,6 +406,9 @@ Drei Entscheidungen, die den Rest erklären:
 - Regionsdaten © OpenStreetMap-Mitwirkende, Lizenz ODbL; Auszüge von
   [Geofabrik](https://download.geofabrik.de). Regionskarte aus den Tageskarten von
   [Protomaps](https://protomaps.com) (Daten © OpenStreetMap-Mitwirkende, ODbL).
+- Höhendaten der Regionen: [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
+  (Mapzen; u. a. SRTM und EU-DEM, erstellt mit Copernicus-Daten der Europäischen Union);
+  außerhalb: Copernicus-Höhenmodell über [Open-Meteo](https://open-meteo.com).
 - Enthaltene Fremdsoftware: [Leaflet](https://leafletjs.com) (BSD-2-Clause),
   [protomaps-leaflet](https://github.com/protomaps/protomaps-leaflet) (BSD-3-Clause),
   [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT) und

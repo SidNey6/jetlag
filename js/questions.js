@@ -727,6 +727,7 @@ function elevationForm(body, existing, prefill) {
   let myElevation = existing?.myElevation ?? null;
   let closer = existing?.closer ?? true;
   const status = el('div', { class: 'card-sub' });
+  const quelle = el('div', { class: 'hint', text: `Quelle: ${grid?.source || 'Copernicus-Geländemodell (90 m)'}. Gebäude und Brücken zählen nicht mit.` });
 
   async function load() {
     if (!getState().area) { status.textContent = 'Erst ein Spielgebiet festlegen – die Höhe wird darüber als Raster geladen.'; return; }
@@ -739,6 +740,7 @@ function elevationForm(body, existing, prefill) {
       myElevation = sampleGrid(grid, myPoint);
       if (myElevation == null) myElevation = await fetchElevationAt(myPoint);
       status.textContent = `Deine Höhe: ${Math.round(myElevation)} m ü. NN · Raster ${grid.cols}×${grid.rows}${grid.offline ? ' · offline' : ''}`;
+      quelle.textContent = `Quelle: ${grid.source || 'Copernicus-Geländemodell (90 m)'}. Gebäude und Brücken zählen nicht mit.`;
     } catch (e) {
       status.textContent = String(e.message || e);
     }
@@ -747,7 +749,7 @@ function elevationForm(body, existing, prefill) {
   append(body,
     prefill?.ruleLabel ? el('div', { class: 'hint', text: prefill.ruleLabel }) : null,
     status,
-    el('div', { class: 'hint', text: 'Quelle: Copernicus-Geländemodell (90 m). Gebäude und Brücken zählen nicht mit.' }),
+    quelle,
     el('label', { class: 'field' }, 'Antwort',
       answerSeg(['Näher am Meeresspiegel', 'Weiter weg'], closer, (v) => { closer = v; })),
   );

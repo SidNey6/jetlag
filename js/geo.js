@@ -395,6 +395,28 @@ export function sampleGrid(grid, p) {
   return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }
 
+// Ausschnitt aus einem großen Raster (vorgebaute Region) für ein Spielgebiet. Das Raster
+// wandert mit der Frage in den Spielstand und in geteilte Links – deshalb gedeckelt.
+export function cropGrid(grid, bounds, maxSide = 64) {
+  const b = {
+    south: Math.max(grid.south, bounds.south), north: Math.min(grid.north, bounds.north),
+    west: Math.max(grid.west, bounds.west), east: Math.min(grid.east, bounds.east),
+  };
+  if (!(b.south < b.north && b.west < b.east)) return null;
+  const dy = (grid.north - grid.south) / (grid.rows - 1), dx = (grid.east - grid.west) / (grid.cols - 1);
+  const rows = Math.max(2, Math.min(maxSide, Math.round((b.north - b.south) / dy) + 1));
+  const cols = Math.max(2, Math.min(maxSide, Math.round((b.east - b.west) / dx) + 1));
+  const values = new Array(rows * cols);
+  for (let r = 0; r < rows; r++) {
+    const lat = b.south + (r / (rows - 1)) * (b.north - b.south);
+    for (let c = 0; c < cols; c++) {
+      const h = sampleGrid(grid, { lat, lng: b.west + (c / (cols - 1)) * (b.east - b.west) });
+      values[r * cols + c] = h == null ? null : Math.round(h * 10) / 10;
+    }
+  }
+  return { ...b, rows, cols, values, source: grid.source };
+}
+
 /* ---------- Räumlicher Index für viele Linien und Flächen ---------- */
 // "Welche Buslinie ist dir am nächsten?" heißt für jeden Rasterpunkt und jede
 // Stichprobe: Abstand zu Tausenden Wegstücken. Linear durchgezählt kostete das auf dem

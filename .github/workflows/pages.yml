@@ -72,6 +72,14 @@ jobs:
             done
             node --max-old-space-size=6144 scripts/region/build.mjs "$region" $args
           done
+      # Geländehöhen aus den AWS Terrain Tiles; fällt das aus, fragt die App online nach
+      - name: Geländehöhen vorbauen
+        if: steps.cache.outputs.cache-hit != 'true' && steps.download.outcome == 'success'
+        continue-on-error: true
+        run: |
+          for region in $(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(Object.keys(REGIONS).join(' '))"); do
+            node scripts/region/elevation.mjs "$region"
+          done
       # Kartenbild aus der Protomaps-Tageskarte; fällt es aus, zeigt die App OSM-Kacheln
       - name: Regionskarte schneiden
         if: steps.cache.outputs.cache-hit != 'true' && steps.download.outcome == 'success'

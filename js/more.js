@@ -734,19 +734,19 @@ function openPrepareSheet() {
       if (p.karte) {
         const liegt = await mapStored(p.karte);
         info.textContent = `Regionsdaten ${p.region ? `${p.regionFiles.length} Dateien, ${formatBytes(p.regionBytes)} unkomprimiert` : '–'}`
-          + (p.elevation ? ' · Geländehöhen' : '')
+          + (p.hoeheOnline ? ' · Geländehöhen (online)' : p.elevation ? ' inkl. Geländehöhen' : '')
           + ` · Karte ${p.karte.name}: ${liegt ? 'liegt schon auf dem Gerät' : `${formatBytes(p.karte.map.bytes)} in einer Datei`}`;
         // Alles parallel; die Karte ist der größte Brocken (bei ~2 MB/s mobil)
-        const sekunden = Math.max(p.regionFiles.length / 10 * 0.25 + (p.elevation ? 3 : 0), liegt ? 0 : p.karte.map.bytes / 2e6);
+        const sekunden = Math.max(p.regionFiles.length / 10 * 0.25, p.hoeheOnline ? 3 : 0, liegt ? 0 : p.karte.map.bytes / 2e6);
         status.textContent = `Dauer grob ${sekunden < 60 ? `${Math.max(5, Math.round(sekunden / 5) * 5)} Sekunden` : `${Math.round(sekunden / 60)} Minuten`}, je nach Empfang. Alles kommt aus dem vorgebauten Auszug – weder Overpass noch OpenStreetMap-Kachelserver.`;
         return;
       }
       if (p.region) {
         info.textContent = `Regionsdaten ${p.region.name}: ${p.regionFiles.length} Dateien, ${formatBytes(p.regionBytes)} unkomprimiert`
-          + (p.elevation ? ' · Geländehöhen' : '')
+          + (p.hoeheOnline ? ' · Geländehöhen (online)' : p.elevation ? ' inkl. Geländehöhen' : '')
           + (withTiles ? ` · ${k} Kartenkacheln (grob ${kachelnMb} MB)` : '');
         // Regionsdaten (10 gleichzeitig) und Kacheln (2 gleichzeitig) laufen parallel
-        const sekunden = Math.max(p.regionFiles.length / 10 * 0.25 + (p.elevation ? 3 : 0), withTiles ? k / 2 * 0.12 : 0);
+        const sekunden = Math.max(p.regionFiles.length / 10 * 0.25, p.hoeheOnline ? 3 : 0, withTiles ? k / 2 * 0.12 : 0);
         status.textContent = `Dauer grob ${sekunden < 60 ? `${Math.max(10, Math.round(sekunden / 10) * 10)} Sekunden` : `${Math.round(sekunden / 60)} Minuten`}, je nach Empfang. Ortsdaten kommen aus dem vorgebauten Auszug, ohne Overpass.`;
         return;
       }

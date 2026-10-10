@@ -112,15 +112,21 @@ function overviewTiles(bounds) {
   return tileList(bounds, 6, VECTOR_MIN_ZOOM - 1, 200);
 }
 
+// Höhen liegen in vielen Regionen schon in den Regionsdaten – dann kein Online-Dienst
+function elevationFromRegion(region) {
+  return !!(region && Region.has(region, 'elevation'));
+}
+
 export function planSteps(area, { withTiles = true, zoomExtra = 3, withStreets = true } = {}) {
   const { pois, refs, adminLevels, elevation } = neededSources();
   const region = regionFor(area);
   const regionFiles = region ? Region.filesFor(region, expand(areaBounds(area), 2000), { streets: withStreets }) : [];
   const osmSchritte = region ? 1 : pois.length + refs.length + adminLevels.length + 1;
+  const hoeheOnline = elevation && !elevationFromRegion(region);
   return {
-    pois, refs, adminLevels, elevation, region, regionFiles,
+    pois, refs, adminLevels, elevation, hoeheOnline, region, regionFiles,
     regionBytes: region ? Region.bytesFor(region, regionFiles) : 0,
-    schritte: osmSchritte + (elevation ? 1 : 0) + (withTiles ? 1 : 0),
+    schritte: osmSchritte + (hoeheOnline ? 1 : 0) + (withTiles ? 1 : 0),
     kacheln: withTiles ? estimateTiles(area, zoomExtra) : 0,
     karte: withTiles ? mapRegionFor(area) : null,
   };
@@ -155,7 +161,8 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
   // Was viel weiter weg liegt als das Spielgebiet groß ist, wird nicht vorgeladen –
   // dafür bliebe es online abrufbar. Sonst zöge eine ferne Küste halbe Länder herunter.
   const reichweiteKm = Math.round(areaRadius(area) / 1000 * 4 + 80);
-  const gesamt = (region ? 1 : pois.length + refs.length + adminLevels.length + 1) + (elevation ? 1 : 0) + (withTiles ? 1 : 0);
+  const hoeheOnline = elevation && !elevationFromRegion(region);
+  const gesamt = (region ? 1 : pois.length + refs.length + adminLevels.length + 1) + (hoeheOnline ? 1 : 0) + (withTiles ? 1 : 0);
   let erledigt = 0;
   const fehler = [];
   const zaehler = { pois: 0, refs: 0, orte: 0, gebiete: 0, hoehe: 0, kacheln: 0, region: 0, karte: 0 };
@@ -170,6 +177,15 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
   const melde = (text) => { letzterText = text; onProgress({ erledigt: Math.min(stand(), gesamt), gesamt, text: text + kachelText() }); };
   const schritt = (text) => melde(text);
   const weiter = () => { erledigt++; };
+
+  // Geländehöhen kommen ebenfalls von einem eigenen Server: auch sie gleich parallel.
+  // Drosselt der Dienst, wird nicht minutenlang gewartet – die Höhenfrage lädt dann
+  // später online nach.
+  const hoeheLauf = hoeheOnline && !signal?.aborted
+    ? fetchElevationGrid(expand(bounds, 1500), { signal, noWait: true })
+      .then(async (grid) => { await bundlePut('elevation', grid); zaehler.hoehe = grid.values.length; })
+      .catch((e) => { if (!signal?.aborted) fehler.push(`Höhen: ${e.message || e}`); })
+    : null;
 
   let kachelLauf = null;
   const karte = withTiles ? mapRegionFor(area) : null;
@@ -210,6 +226,10 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
       });
       zaehler.region = res.done - res.failed;
       if (res.failed) fehler.push(`Regionsdaten: ${res.failed} Dateien nicht geladen`);
+      if (elevation && elevationFromRegion(region)) {
+        const g = await Region.regionGet(region, 'elevation').catch(() => null);
+        zaehler.hoehe = g ? g.rows * g.cols : 0;
+      }
     } catch (e) {
       if (signal?.aborted) throw e;
       fehler.push(`Regionsdaten: ${e.message || e}`);
@@ -267,16 +287,10 @@ export async function prepareArea(area, { onProgress = () => {}, signal, withTil
     await pause(PAUSE_MS, signal);
   }
 
-  // Geländehöhen für Fragen nach dem Meeresspiegel
-  if (elevation && !signal?.aborted) {
+  // Geländehöhen für Fragen nach dem Meeresspiegel (laufen seit Beginn parallel)
+  if (hoeheLauf) {
     schritt('Geländehöhen');
-    try {
-      const grid = await fetchElevationGrid(expand(bounds, 1500), { signal });
-      await bundlePut('elevation', grid);
-      zaehler.hoehe = grid.values.length;
-    } catch (e) {
-      fehler.push(`Höhen: ${e.message || e}`);
-    }
+    await hoeheLauf;
     weiter();
   }
 

@@ -191,6 +191,10 @@ export function decode(path, data) {
     });
   }
   if (path === 'areas') return data.items;
+  if (path === 'elevation') {
+    const { v, scale = 1, ...rest } = data;
+    return { ...rest, values: v.map((x) => x * scale) };
+  }
   return data;
 }
 
