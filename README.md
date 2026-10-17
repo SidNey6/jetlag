@@ -149,6 +149,14 @@ Rasterkacheln. Ausschalten lässt sich die Regionskarte unter *Mehr → Einstell
 node scripts/region/basemap.mjs bonn   # nach build.mjs; liest nur die nötigen Bytebereiche
 ```
 
+## Android-App: Endgame-Spur bei gesperrtem Bildschirm
+
+Browser orten nur, solange die Seite sichtbar ist – auch eine installierte Web-App. Für das
+Endgame gibt es deshalb eine Android-App: dieselbe App in einer nativen Hülle, deren
+Aufzeichnung als Android-Dienst weiterläuft, bei gesperrtem Bildschirm, in einer anderen App
+und sogar nach dem Wegwischen. Die Punkte landen sofort auf dem Gerät und werden beim
+Zurückkehren in die Spur übernommen. Download und Details: [`native/README.md`](native/README.md).
+
 ## Offline spielen
 
 Unter *Mehr → Offline-Vorrat → Spielgebiet vorbereiten* lädt die App einmal alles herunter, was
@@ -409,6 +417,7 @@ Drei Entscheidungen, die den Rest erklären:
 - Höhendaten der Regionen: [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
   (Mapzen; u. a. SRTM und EU-DEM, erstellt mit Copernicus-Daten der Europäischen Union);
   außerhalb: Copernicus-Höhenmodell über [Open-Meteo](https://open-meteo.com).
+- Android-App: [Capacitor](https://capacitorjs.com) (MIT).
 - Enthaltene Fremdsoftware: [Leaflet](https://leafletjs.com) (BSD-2-Clause),
   [protomaps-leaflet](https://github.com/protomaps/protomaps-leaflet) (BSD-3-Clause),
   [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT) und

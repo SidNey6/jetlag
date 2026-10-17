@@ -1,0 +1,13 @@
+{
+  "appId": "io.github.sidney6.jetlag",
+  "appName": "Jetlag Toolkit",
+  "webDir": "www",
+  "android": {
+    "useLegacyBridge": true
+  },
+  "plugins": {
+    "SystemBars": {
+      "style": "DARK"
+    }
+  }
+}

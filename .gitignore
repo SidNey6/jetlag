@@ -5,3 +5,5 @@ node_modules/
 
 # Regionsdaten werden in der CI gebaut (scripts/region/build.mjs)
 data/
+native/node_modules/
+native/www/

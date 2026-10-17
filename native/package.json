@@ -1,0 +1,18 @@
+{
+  "name": "jetlag-toolkit-native",
+  "private": true,
+  "description": "Android-Hülle um die Jetlag-Toolkit-Web-App – für Endgame-Aufzeichnung bei gesperrtem Bildschirm",
+  "scripts": {
+    "web": "node scripts/sync-web.mjs",
+    "sync": "node scripts/sync-web.mjs && cap sync android",
+    "apk": "node scripts/sync-web.mjs && cap sync android && cd android && ./gradlew assembleRelease",
+    "apk:debug": "node scripts/sync-web.mjs && cap sync android && cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}

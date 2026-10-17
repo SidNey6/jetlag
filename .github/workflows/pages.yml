@@ -108,9 +108,67 @@ jobs:
         with:
           name: region-data
           path: data
+      - name: Nur die Website veröffentlichen
+        run: rm -rf native
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Android-App: je App-Version ein GitHub-Release mit signierter APK. Läuft nur, wenn der
+  # Signaturschlüssel als Secret hinterlegt ist – immer derselbe, sonst ließe sich die
+  # neue APK nicht über die installierte legen.
+  android:
+    needs: test
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KEYSTORE_B64: ${{ secrets.JETLAG_KEYSTORE_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Neue Version?
+        id: check
+        run: |
+          v=$(sed -n 's/.*"version": *"\(v[0-9.]*\)".*/\1/p' version.json)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "Kein Signaturschlüssel hinterlegt – keine APK"
+          elif gh release view "$v" >/dev/null 2>&1; then
+            echo "Release $v gibt es schon"
+          else
+            echo "build=1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.build
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        if: steps.check.outputs.build
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: APK bauen
+        if: steps.check.outputs.build
+        working-directory: native
+        env:
+          JETLAG_STORE_PASSWORD: ${{ secrets.JETLAG_STORE_PASSWORD }}
+          JETLAG_KEY_PASSWORD: ${{ secrets.JETLAG_STORE_PASSWORD }}
+          JETLAG_KEY_ALIAS: jetlag
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export JETLAG_STORE_FILE="$RUNNER_TEMP/release.jks"
+          npm ci
+          npm run apk
+          cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/jetlag-toolkit.apk"
+      - name: Release anlegen
+        if: steps.check.outputs.build
+        run: |
+          v="${{ steps.check.outputs.version }}"
+          gh release create "$v" "$RUNNER_TEMP/jetlag-toolkit.apk" --target "$GITHUB_SHA" \
+            --title "Jetlag Toolkit $v (Android)" \
+            --notes "Android-App mit Endgame-Aufzeichnung im Hintergrund. Auf dem Handy herunterladen und installieren (einmalig „Installation aus unbekannten Quellen“ erlauben). Neue Versionen lassen sich über die alte installieren; der Spielstand bleibt erhalten."

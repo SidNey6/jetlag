@@ -1,5 +1,6 @@
 // Erzeugt die App-Icons als PNG – ohne Bildbibliothek, damit das Repo
 // ohne Installationsschritt baubar bleibt. Aufruf: node scripts/make-icons.mjs
+// Mit --android legt es zusätzlich die Symbole der Android-App an (native/android).
 import { deflateSync } from 'node:zlib';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -77,26 +78,30 @@ function scene(u, v, scale) {
   return null;
 }
 
-function render(size, { contentScale = 1 } = {}) {
+// transparent: nur das Motiv (Vordergrund adaptiver Android-Symbole); round: runde Maske
+function render(size, { contentScale = 1, transparent = false, round = false } = {}) {
   const ss = 3; // 3x3-Supersampling gegen Treppenkanten
   const buf = Buffer.alloc(size * size * 4);
   for (let py = 0; py < size; py++) {
     for (let px = 0; px < size; px++) {
-      let r = 0, g = 0, b = 0;
+      let r = 0, g = 0, b = 0, a = 0;
       for (let sy = 0; sy < ss; sy++) {
         for (let sx = 0; sx < ss; sx++) {
           const u = (px + (sx + 0.5) / ss) / size;
           const v = (py + (sy + 0.5) / ss) / size;
-          const c = scene(u, v, contentScale) || BG;
-          r += c[0]; g += c[1]; b += c[2];
+          if (round && Math.hypot(u - 0.5, v - 0.5) > 0.5) continue;
+          const c = scene(u, v, contentScale) || (transparent ? null : BG);
+          if (!c) continue;
+          r += c[0]; g += c[1]; b += c[2]; a++;
         }
       }
       const n = ss * ss;
       const i = (py * size + px) * 4;
-      buf[i] = Math.round(r / n);
-      buf[i + 1] = Math.round(g / n);
-      buf[i + 2] = Math.round(b / n);
-      buf[i + 3] = 255;
+      // Farbe über die gedeckten Teilpunkte mitteln, Deckkraft über alle
+      buf[i] = a ? Math.round(r / a) : 0;
+      buf[i + 1] = a ? Math.round(g / a) : 0;
+      buf[i + 2] = a ? Math.round(b / a) : 0;
+      buf[i + 3] = Math.round((a / n) * 255);
     }
   }
   return encodePng(size, size, buf);
@@ -114,4 +119,22 @@ const files = [
 for (const [name, data] of files) {
   writeFileSync(join(OUT, name), data);
   console.log(`${name}  ${(data.length / 1024).toFixed(1)} kB`);
+}
+
+// Android: klassische und runde Symbole je Dichte, dazu der Vordergrund adaptiver Symbole
+// (108 dp, sichtbar sind nur die inneren 66 dp – daher das kleinere Motiv)
+if (process.argv.includes('--android')) {
+  const RES = join(OUT, '..', '..', 'native', 'android', 'app', 'src', 'main', 'res');
+  const DICHTEN = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
+  for (const [d, f] of Object.entries(DICHTEN)) {
+    const dir = join(RES, `mipmap-${d}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'ic_launcher.png'), render(Math.round(48 * f), { contentScale: 0.86 }));
+    writeFileSync(join(dir, 'ic_launcher_round.png'), render(Math.round(48 * f), { contentScale: 0.8, round: true }));
+    writeFileSync(join(dir, 'ic_launcher_foreground.png'), render(Math.round(108 * f), { contentScale: 0.6, transparent: true }));
+  }
+  const hex = '#' + BG.map((x) => x.toString(16).padStart(2, '0')).join('').toUpperCase();
+  writeFileSync(join(RES, 'values', 'ic_launcher_background.xml'),
+    `<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">${hex}</color>\n</resources>\n`);
+  console.log('Android-Symbole geschrieben');
 }

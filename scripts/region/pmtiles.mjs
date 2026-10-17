@@ -7,25 +7,12 @@
 // Blattverzeichnis.
 
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { zxyToTileId, parseDirectory } from '../../js/pmtiles.js';
 
 /* ---------- Kachel-IDs ---------- */
 
-export function zxyToTileId(z, x, y) {
-  let acc = 0;
-  for (let t = 0; t < z; t++) acc += 4 ** t;
-  const n = 2 ** z;
-  let d = 0, xx = x, yy = y;
-  for (let s = n / 2; s >= 1; s /= 2) {
-    const rx = (xx & s) > 0 ? 1 : 0;
-    const ry = (yy & s) > 0 ? 1 : 0;
-    d += s * s * ((3 * rx) ^ ry);
-    if (ry === 0) {
-      if (rx === 1) { xx = s - 1 - xx; yy = s - 1 - yy; }
-      [xx, yy] = [yy, xx];
-    }
-  }
-  return acc + d;
-}
+// Kachel-IDs und Verzeichnisformat teilt sich das Skript mit der App (js/pmtiles.js)
+export { zxyToTileId };
 
 export function lonToX(lon, z) {
   return Math.floor(((lon + 180) / 360) * 2 ** z);
@@ -77,24 +64,7 @@ function unpack(buf, compression) {
 }
 
 export function readDirectory(buf, compression) {
-  const d = unpack(buf, compression);
-  let p = 0;
-  const v = () => {
-    let val = 0, mul = 1, b;
-    do { b = d[p++]; val += (b & 0x7f) * mul; mul *= 128; } while (b >= 128);
-    return val;
-  };
-  const n = v();
-  const entries = new Array(n);
-  let id = 0;
-  for (let i = 0; i < n; i++) { id += v(); entries[i] = { tileId: id, runLength: 0, length: 0, offset: 0 }; }
-  for (let i = 0; i < n; i++) entries[i].runLength = v();
-  for (let i = 0; i < n; i++) entries[i].length = v();
-  for (let i = 0; i < n; i++) {
-    const o = v();
-    entries[i].offset = o === 0 && i > 0 ? entries[i - 1].offset + entries[i - 1].length : o - 1;
-  }
-  return entries;
+  return parseDirectory(unpack(buf, compression));
 }
 
 export function writeDirectory(entries) {

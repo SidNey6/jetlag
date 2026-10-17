@@ -17,6 +17,7 @@ import { wantAwake } from './wakelock.js';
 import { formatDistance, destination } from './geo.js';
 import { activeRound, currentPhase } from './phases.js';
 import { markPhase } from './rounds.js';
+import { NATIVE, nativeTracker, APK_URL } from './native.js';
 import {
   el, clear, append, openSheet, confirmSheet, toast, icon, group, row, toggleSwitch, formatClock, formatTime,
 } from './ui/ui.js';
@@ -37,6 +38,7 @@ let renderer = null;
 let drawTimer = null;
 let saveTimer = null;
 let pocket = null;
+let lastSave = 0;
 
 export function meta() {
   return getState().endgame || null;
@@ -60,6 +62,7 @@ function loadStore() {
 function saveNow() {
   clearTimeout(saveTimer);
   saveTimer = null;
+  lastSave = Date.now();
   if (!store) {
     try { localStorage.removeItem(KEY); } catch (e) { /* egal */ }
     return;
@@ -263,10 +266,22 @@ export function setRecording(on) {
 
 function applyRecording(on) {
   recording = on;
-  if (on) newSegment = true;
+  if (on) {
+    newSegment = true;
+    // Der Android-Dienst liefert ab dem letzten gesicherten Punkt nach – auch Punkte aus
+    // der Zeit, in der die App geschlossen war
+    Loc.setNativeCursor(lastPointTime() || (meta() ? meta().startedAt : Date.now()));
+  }
   Loc.keepAlive('endgame', on);
-  wantAwake('endgame', on);
+  // Im Browser ortet nur eine sichtbare Seite – in der Android-App darf das Display aus
+  wantAwake('endgame', on && !NATIVE);
   if (!on) saveNow();
+}
+
+function lastPointTime() {
+  const seg = store && store.track[store.track.length - 1];
+  const p = seg && seg[seg.length - 1];
+  return p ? p.t : 0;
 }
 
 function onFix(fix) {
@@ -289,7 +304,10 @@ function onFix(fix) {
     seg.push(p);
     if (net) S.markWalked(net, states, last, p, widthM());
   }
-  saveSoon();
+  // Im Hintergrund laufen Zeitgeber nur noch sporadisch: dann direkt sichern, höchstens
+  // alle 30 Sekunden
+  if (document.visibilityState !== 'visible' && Date.now() - lastSave > 30000) saveNow();
+  else saveSoon();
   drawSoon();
   updateChip();
 }
@@ -547,6 +565,20 @@ export function openEndgameSheet() {
   if (!m) return openStopPicker();
   openSheet('Endgame', (body, close) => {
     const st = stats();
+    // Android: Manche Hersteller beenden Hintergrunddienste trotz Benachrichtigung, solange
+    // die App der Akku-Optimierung unterliegt
+    const akkuZeile = NATIVE ? row({ icon: 'battery', title: 'Akku-Optimierung', value: '…' }) : null;
+    if (akkuZeile) {
+      nativeTracker().status().then((s) => {
+        const wert = akkuZeile.querySelector('.row-value');
+        if (wert) wert.textContent = s.batteryOptimized ? 'an' : 'aus';
+        const sub = el('div', { class: 'row-sub', text: s.batteryOptimized
+          ? 'Tippen und „Zulassen“ wählen – sonst kann Android die Aufzeichnung beenden'
+          : 'Die Aufzeichnung darf im Hintergrund weiterlaufen' });
+        akkuZeile.querySelector('.row-title')?.after(sub);
+        if (s.batteryOptimized) akkuZeile.addEventListener('click', () => { nativeTracker().requestBatteryExemption(); close(); });
+      }).catch(() => {});
+    }
     const km = (x) => formatDistance(x);
     append(body,
       el('div', { class: 'endgame-hero' },
@@ -566,10 +598,16 @@ export function openEndgameSheet() {
           icon: 'rec', title: 'Wege aufzeichnen', sub: `${km(st.track)} gelaufen${st.guessed ? ` · ${km(st.guessed)} geschätzt` : ''}`,
           control: toggleSwitch(recording, (v) => setRecording(v)),
         }),
-        row({ icon: 'pocket', title: 'Taschenmodus', sub: 'Schwarzer Bildschirm, Aufzeichnung läuft weiter', onClick: () => { close(); enterPocket(); } }),
+        NATIVE ? akkuZeile : row({ icon: 'pocket', title: 'Taschenmodus', sub: 'Schwarzer Bildschirm, Aufzeichnung läuft weiter', onClick: () => { close(); enterPocket(); } }),
         row({ icon: 'fileUp', title: 'GPX importieren', sub: 'Spur einer Tracking-App oder eines Mitspielers', onClick: () => importGpx() }),
         row({ icon: 'fileDown', title: 'GPX exportieren', onClick: () => exportGpx() })),
-      el('div', { class: 'hint', text: 'Bei ausgeschaltetem Bildschirm ortet kein Browser. Lücken schließt die App über den kürzesten Weg im Straßennetz (gestrichelt). Lückenlos geht es mit dem Taschenmodus oder einer Tracking-App plus GPX-Import.' }),
+      el('div', { class: 'hint', text: NATIVE
+        ? 'Die Aufzeichnung läuft als Android-Dienst – auch bei gesperrtem Bildschirm, in einer anderen App oder wenn die App geschlossen ist. Solange sie läuft, steht „Endgame-Aufzeichnung läuft“ in der Benachrichtigungsleiste.'
+        : 'Bei ausgeschaltetem Bildschirm ortet kein Browser. Lücken schließt die App über den kürzesten Weg im Straßennetz (gestrichelt). Lückenlos geht es mit dem Taschenmodus, der Android-App oder einer Tracking-App plus GPX-Import.' }),
+      NATIVE ? null : group(null, row({
+        icon: 'download', title: 'Android-App', sub: 'Zeichnet auch bei gesperrtem Bildschirm auf',
+        onClick: () => window.open(APK_URL, '_blank'),
+      })),
       group(null, row({ icon: 'stop', title: 'Endgame beenden', danger: true, onClick: () => { close(); endEndgame(); } })),
     );
     return [];

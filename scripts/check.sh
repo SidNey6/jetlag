@@ -20,3 +20,14 @@ if [ $fail -ne 0 ]; then
   exit 1
 fi
 echo "Syntax aller Module ok"
+
+# Eine Versionsnummer an drei Stellen: App, Service Worker und version.json (Update-Hinweis
+# der Android-App)
+app=$(sed -n "s/.*__JL_VERSION__ = '\(v[0-9.]*\)'.*/\1/p" js/main.js)
+sw=$(sed -n "s/^const VERSION = '\(v[0-9.]*\)'.*/\1/p" sw.js)
+datei=$(sed -n 's/.*"version": *"\(v[0-9.]*\)".*/\1/p' version.json)
+if [ "$app" != "$sw" ] || [ "$app" != "$datei" ]; then
+  echo "Versionen passen nicht zusammen: main.js $app, sw.js $sw, version.json $datei"
+  exit 1
+fi
+echo "Version $app überall gleich"

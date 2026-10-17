@@ -8,8 +8,10 @@
 
 import { destination } from './geo.js';
 import { streetTilesIn } from './osmgeo.js';
+import { NATIVE, SITE } from './native.js';
 
-const BASE = './data/';
+// Die Android-App bringt nur die Programmdateien mit; Daten kommen von der Website
+const BASE = NATIVE ? `${SITE}data/` : './data/';
 export const REGION_CACHE = 'jetlag-region-v1';
 
 let regions = [];

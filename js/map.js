@@ -8,6 +8,7 @@ import * as Loc from './location.js';
 import { distance, bearing, formatDistance, formatBearing } from './geo.js';
 import { el, toast } from './ui/ui.js';
 import * as Region from './region.js';
+import { RegionMap } from './pmtiles.js';
 
 const DEFAULT_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
@@ -121,6 +122,19 @@ export function setTileSource(url) {
   refreshBaseMap();
 }
 
+const kartenQuellen = new Map();
+
+function regionMapSource(r) {
+  const url = Region.mapUrl(r);
+  if (!kartenQuellen.has(url)) kartenQuellen.set(url, new RegionMap(url, Region.REGION_CACHE));
+  return kartenQuellen.get(url);
+}
+
+// Nach dem Löschen des Offline-Vorrats nicht mehr aus der alten Datei lesen
+export function forgetStoredMaps() {
+  for (const q of kartenQuellen.values()) q.vergessen();
+}
+
 // Vorgebaute Regionskarten (Vektorkacheln aus einer PMTiles-Datei, siehe region.js):
 // aufrufen, sobald das Regionsverzeichnis da ist oder sich die Einstellung ändert.
 export function refreshBaseMap() {
@@ -133,7 +147,8 @@ export function refreshBaseMap() {
     vectorLayers = regionen.map((r) => {
       const b = r.bounds;
       return protomapsL.leafletLayer({
-        url: Region.mapUrl(r),
+        // Eigene Quelle: liest aus der gespeicherten Datei, sonst Bereiche aus dem Netz
+        url: regionMapSource(r),
         flavor: 'light',
         lang: 'de',
         maxDataZoom: r.map.maxZoom || 14,

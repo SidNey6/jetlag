@@ -16,10 +16,11 @@ import * as Endgame from './endgame.js';
 import { findStopsNear } from './overpass.js';
 import { initBundle } from './bundle.js';
 import { initRegions } from './region.js';
+import { NATIVE, newerVersion, APK_URL } from './native.js';
 import { el, clear, openSheet, promptSheet, toast, icon, row } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.10.1';
+window.__JL_VERSION__ = 'v1.11.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
@@ -155,6 +156,8 @@ function syncLocButtons() {
 /* ---------- Service Worker ---------- */
 
 async function registerSW() {
+  // Die Android-App bringt ihre Dateien selbst mit und prüft Updates über version.json
+  if (NATIVE) { checkApkUpdate(); return; }
   if (!('serviceWorker' in navigator)) return;
   try {
     const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
@@ -171,6 +174,18 @@ async function registerSW() {
   } catch (e) {
     console.warn('Service Worker nicht registriert', e);
   }
+}
+
+async function checkApkUpdate() {
+  const neu = await newerVersion(window.__JL_VERSION__);
+  if (!neu) return;
+  const root = document.getElementById('toast-root');
+  root.append(el('div', { class: 'toast' },
+    icon('download'), `Version ${neu} verfügbar`,
+    el('button', {
+      class: 'btn btn-small btn-primary', style: { marginLeft: '6px' },
+      onclick: (e) => { e.currentTarget.closest('.toast').remove(); window.open(APK_URL, '_blank'); },
+    }, 'App laden')));
 }
 
 function showUpdateToast(sw) {

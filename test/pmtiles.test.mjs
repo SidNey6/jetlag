@@ -103,3 +103,41 @@ test('Gleiche Inhalte liegen im Ausschnitt nur einmal', async () => {
   const h = readHeader(res.buffer);
   assert.ok(h.tileContents < h.tileEntries, `${h.tileContents} Inhalte für ${h.tileEntries} Kacheln`);
 });
+
+test('App-Kartenleser: Kacheln aus dem Netz per Bereichsanfrage, gzip entpackt', async () => {
+  const { RegionMap } = await import('../js/pmtiles.js');
+  const { gzipSync: gz } = await import('node:zlib');
+  // Archiv mit gzip-komprimierten Kacheln, wie es Protomaps liefert
+  const tiles = [];
+  for (let z = 0; z <= 2; z++) for (let x = 0; x < 2 ** z; x++) for (let y = 0; y < 2 ** z; y++) {
+    tiles.push({ tileId: zxyToTileId(z, x, y), body: gz(Buffer.from(`kachel ${z}/${x}/${y}`)) });
+  }
+  tiles.sort((a, b) => a.tileId - b.tileId);
+  let pos = 0;
+  const entries = tiles.map((t) => { const e = { tileId: t.tileId, runLength: 1, length: t.body.length, offset: pos }; pos += t.body.length; return e; });
+  const root = writeDirectory(entries);
+  const header = writeHeader({
+    rootOffset: 127, rootLength: root.length, metadataOffset: 127 + root.length, metadataLength: 0,
+    leafOffset: 127 + root.length, leafLength: 0, dataOffset: 127 + root.length, dataLength: pos,
+    addressedTiles: entries.length, tileEntries: entries.length, tileContents: entries.length,
+    clustered: 1, internalCompression: 2, tileCompression: 2, tileType: 1, minZoom: 0, maxZoom: 2,
+    minLon: -180, minLat: -85, maxLon: 180, maxLat: 85, centerZoom: 0, centerLon: 0, centerLat: 0,
+  });
+  const datei = Buffer.concat([header, root, ...tiles.map((t) => t.body)]);
+  const anfragen = [];
+  const altFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opt) => {
+    const [, a, b] = /bytes=(\d+)-(\d+)/.exec(opt.headers.range);
+    anfragen.push(opt.headers.range);
+    return new Response(datei.subarray(Number(a), Number(b) + 1), { status: 206 });
+  };
+  try {
+    const karte = new RegionMap('https://example.org/map.pmtiles', 'test');
+    const k = await karte.getZxy(2, 3, 1);
+    assert.equal(new TextDecoder().decode(k.data), 'kachel 2/3/1');
+    assert.equal(await karte.getZxy(5, 0, 0), undefined);
+    assert.ok(anfragen.length <= 2, `${anfragen.length} Anfragen`);
+  } finally {
+    globalThis.fetch = altFetch;
+  }
+});

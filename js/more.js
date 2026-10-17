@@ -703,6 +703,7 @@ async function offlinePage(host) {
         if (!(await confirmSheet('Offline-Vorrat löschen?', 'Karten und vorgeladene Daten werden entfernt.', { danger: true, okLabel: 'Löschen' }))) return;
         await Promise.all([clearBundle(), clearTileCache(), caches.delete(REGION_CACHE)]);
         forgetMaps();
+        MapMod.forgetStoredMaps();
         render();
         toast('Vorrat geleert', 'ok');
       },
