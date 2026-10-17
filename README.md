@@ -63,12 +63,18 @@ vor dem Übernehmen.
 
 ## Vorgebaute Regionen
 
-Für die Regionen in `scripts/region/regions.mjs` baut GitHub Actions einmal im Monat einen
-OpenStreetMap-Auszug, ein Höhenraster und eine Vektorkarte. Innerhalb einer Region braucht die
+Für einige Städte samt Umland baut GitHub Actions einmal im Monat einen OpenStreetMap-Auszug,
+ein Höhenraster und eine Vektorkarte: Berlin, Bonn, Dortmund, Düsseldorf, Frankfurt am Main,
+Freiburg, Hamburg, Heidelberg/Mannheim, Karlsruhe, Köln, Leipzig, München, Münster und
+Stuttgart. Die Rahmen stehen in `scripts/region/regions.mjs`. Innerhalb einer Region braucht die
 App dann weder Overpass noch Online-Höhendienst noch Kachelserver, und das Vorbereiten dauert
 Sekunden. Außerhalb läuft alles wie gewohnt online.
 
+Neue Regionen brauchen nur einen Eintrag dort. `coverage.mjs` prüft, ob die angegebenen
+Geofabrik-Auszüge den Rahmen ganz abdecken.
+
 ```bash
+node scripts/region/coverage.mjs
 node scripts/region/build.mjs <region> --pbf <auszug.osm.pbf>
 node scripts/region/elevation.mjs <region>
 node scripts/region/basemap.mjs <region>

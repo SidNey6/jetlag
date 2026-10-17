@@ -146,7 +146,7 @@ function settingsPage(host) {
       }),
       regionKarten.length ? row({
         icon: 'mapPinned', title: 'Vorgebaute Regionskarte',
-        sub: `In ${regionKarten.map((r) => r.name).join(', ')} statt der Kartenquelle – lädt schneller und offline in einem Stück`,
+        sub: `In ${regionKarten.length === 1 ? regionKarten[0].name : `${regionKarten.length} Städten`} statt der Kartenquelle – lädt schneller und offline in einem Stück`,
         control: toggleSwitch(st.regionMap !== false, (v) => { set((x) => { x.regionMap = v; }); MapMod.setTileSource(getState().settings.tileUrl); }),
       }) : null),
     group('Fragen',
@@ -642,7 +642,15 @@ async function offlinePage(host) {
   // Vorgebaute Regionsdaten: welche Regionen es gibt, wie aktuell, was schon auf dem Gerät ist
   const regionen = listRegions();
   if (regionen.length) {
-    const zeilen = (await Promise.all(regionen.map(async (r) => {
+    // Ausführlich nur die Region(en) des Spielgebiets bzw. des Kartenausschnitts, die
+    // übrigen als Namensliste
+    const bezug = s.area ? C.areaBounds(s.area) : null;
+    const mitte = MapMod.getMap()?.getCenter();
+    const schneidet = (a, b) => a.south < b.north && a.north > b.south && a.west < b.east && a.east > b.west;
+    const hier0 = regionen.filter((r) => (bezug ? schneidet(r.bounds, bezug)
+      : mitte && mitte.lat >= r.bounds.south && mitte.lat <= r.bounds.north && mitte.lng >= r.bounds.west && mitte.lng <= r.bounds.east));
+    const andere = regionen.filter((r) => !hier0.includes(r)).map((r) => r.name).sort((a, b) => a.localeCompare(b, 'de'));
+    const zeilen = (await Promise.all(hier0.map(async (r) => {
       const anzahl = Object.keys(r.files).length;
       const hier = await cachedCount(r);
       const daten = row({
@@ -667,6 +675,12 @@ async function offlinePage(host) {
       });
       return [daten, karte];
     }))).flat();
+    if (andere.length) {
+      zeilen.push(row({
+        icon: 'mapPinned', title: hier0.length ? 'Weitere Regionen' : `${andere.length} Regionen`,
+        sub: andere.join(', '),
+      }));
+    }
     host.insertBefore(group('Vorgebaute Regionen', ...zeilen), slot);
     host.insertBefore(el('div', { class: 'hint', text: 'In diesen Regionen beantwortet die App Ortsfragen ohne Overpass, und die Karte kommt als eine fertige Datei statt Kachel für Kachel. Einmal abgerufene Dateien bleiben auf dem Gerät; „Spielgebiet vorbereiten" holt alle auf einmal.' }), slot);
   }

@@ -50,44 +50,43 @@ jobs:
           key: ${{ steps.key.outputs.key }}
           # Fällt der Neubau aus (Geofabrik nicht erreichbar), bleibt der letzte Stand
           restore-keys: region-
+      # Jede Region muss ganz in ihren Auszügen liegen, sonst fehlen am Rand Daten
+      - name: Abdeckung prüfen
+        id: coverage
+        if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: node scripts/region/coverage.mjs
       - name: OSM-Auszüge laden
         id: download
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cache.outputs.cache-hit != 'true' && steps.coverage.outcome == 'success'
         continue-on-error: true
         run: |
           mkdir -p "$RUNNER_TEMP/osm"
           node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; for (const r of Object.values(REGIONS)) for (const u of r.sources) console.log(u)" | sort -u > "$RUNNER_TEMP/osm/urls.txt"
-          while read -r url; do
-            curl -fsSL --retry 3 --retry-delay 20 -o "$RUNNER_TEMP/osm/$(basename "$url")" "$url"
-          done < "$RUNNER_TEMP/osm/urls.txt"
+          # vier gleichzeitig; ein Fehler bricht den Schritt ab
+          xargs -P 4 -n 1 sh -c 'curl -fsSL --retry 3 --retry-delay 20 -o "$RUNNER_TEMP/osm/$(basename "$0")" "$0"' < "$RUNNER_TEMP/osm/urls.txt"
           ls -la "$RUNNER_TEMP/osm"
-      - name: Regionsdaten bauen
+      # Je Region: Ortsdaten, Höhen (AWS Terrain Tiles), Karte (Protomaps). Schlägt etwas
+      # fehl, bleibt für diese Region der letzte Stand bzw. die App fragt online nach.
+      - name: Regionen bauen
         if: steps.cache.outputs.cache-hit != 'true' && steps.download.outcome == 'success'
-        continue-on-error: true
         run: |
-          for region in $(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(Object.keys(REGIONS).join(' '))"); do
+          regionen=$(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(Object.keys(REGIONS).join(' '))")
+          for region in $regionen; do
+            echo "::group::$region"
             args=""
             for url in $(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(REGIONS['$region'].sources.join(' '))"); do
               args="$args --pbf $RUNNER_TEMP/osm/$(basename "$url")"
             done
-            node --max-old-space-size=6144 scripts/region/build.mjs "$region" $args
+            if node --max-old-space-size=6144 scripts/region/build.mjs "$region" $args; then
+              node scripts/region/elevation.mjs "$region" || echo "::warning::Höhen $region fehlgeschlagen"
+              node scripts/region/basemap.mjs "$region" || echo "::warning::Karte $region fehlgeschlagen"
+            else
+              echo "::warning::Region $region fehlgeschlagen"
+            fi
+            echo "::endgroup::"
           done
-      # Geländehöhen aus den AWS Terrain Tiles; fällt das aus, fragt die App online nach
-      - name: Geländehöhen vorbauen
-        if: steps.cache.outputs.cache-hit != 'true' && steps.download.outcome == 'success'
-        continue-on-error: true
-        run: |
-          for region in $(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(Object.keys(REGIONS).join(' '))"); do
-            node scripts/region/elevation.mjs "$region"
-          done
-      # Kartenbild aus der Protomaps-Tageskarte; fällt es aus, zeigt die App OSM-Kacheln
-      - name: Regionskarte schneiden
-        if: steps.cache.outputs.cache-hit != 'true' && steps.download.outcome == 'success'
-        continue-on-error: true
-        run: |
-          for region in $(node --input-type=module -e "import { REGIONS } from './scripts/region/regions.mjs'; console.log(Object.keys(REGIONS).join(' '))"); do
-            node scripts/region/basemap.mjs "$region"
-          done
+          du -sh data/*
       - name: Daten vorhanden?
         run: test -f data/regions.json && du -sh data
       - uses: actions/upload-artifact@v4

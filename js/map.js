@@ -20,7 +20,7 @@ const VECTOR_MIN_ZOOM = 10;
 let map = null;
 let mask = null;
 let tileLayer = null;
-let vectorLayers = [];    // je Region mit vorgebauter Karte eine Ebene
+let vectorLayers = [];    // je Region mit vorgebauter Karte: { region, layer }
 const layers = {};
 let meMarker = null, meAccuracy = null;
 let follow = true;
@@ -143,24 +143,15 @@ export function refreshBaseMap() {
   const sig = regionen.map((r) => `${r.id}@${r.map.version}`).join(',');
   if (refreshBaseMap.sig !== sig) {
     refreshBaseMap.sig = sig;
-    for (const l of vectorLayers) l.remove();
-    vectorLayers = regionen.map((r) => {
-      const b = r.bounds;
-      return protomapsL.leafletLayer({
-        // Eigene Quelle: liest aus der gespeicherten Datei, sonst Bereiche aus dem Netz
-        url: regionMapSource(r),
-        flavor: 'light',
-        lang: 'de',
-        maxDataZoom: r.map.maxZoom || 14,
-        minZoom: VECTOR_MIN_ZOOM,
-        maxZoom: 20,
-        bounds: L.latLngBounds([b.south, b.west], [b.north, b.east]),
-        attribution: VECTOR_ATTRIB,
-        className: 'jl-tiles jl-vector',
-        zIndex: 2,
-      }).addTo(map);
-    });
+    for (const { layer } of vectorLayers) if (layer) layer.remove();
+    // Ebenen entstehen erst, wenn eine Region in Sicht kommt (showNearbyMaps)
+    vectorLayers = regionen.map((r) => ({ region: r, layer: null }));
+    if (!refreshBaseMap.bound) {
+      refreshBaseMap.bound = true;
+      map.on('moveend', showNearbyMaps);
+    }
   }
+  showNearbyMaps();
   // Rasterebene: Regionen mit eigener Karte aussparen
   if (tileLayer) {
     const innen = regionen.map((r) => r.bounds);
@@ -170,6 +161,38 @@ export function refreshBaseMap() {
       tileLayer.redraw();
     }
   }
+}
+
+// Bei vielen Regionen nur die Ebenen in der Nähe des Bildausschnitts auf der Karte halten –
+// jede Ebene rechnet sonst bei jeder Bewegung mit
+function showNearbyMaps() {
+  if (!map || !vectorLayers.length) return;
+  const sicht = map.getZoom() >= VECTOR_MIN_ZOOM - 1 ? map.getBounds().pad(0.5) : null;
+  for (const v of vectorLayers) {
+    const b = v.region.bounds;
+    const nah = sicht && sicht.intersects(L.latLngBounds([b.south, b.west], [b.north, b.east]));
+    if (nah && !v.layer) v.layer = vectorLayerFor(v.region);
+    if (!v.layer) continue;
+    if (nah && !map.hasLayer(v.layer)) v.layer.addTo(map);
+    else if (!nah && map.hasLayer(v.layer)) v.layer.remove();
+  }
+}
+
+function vectorLayerFor(r) {
+  const b = r.bounds;
+  return protomapsL.leafletLayer({
+    // Eigene Quelle: liest aus der gespeicherten Datei, sonst Bereiche aus dem Netz
+    url: regionMapSource(r),
+    flavor: 'light',
+    lang: 'de',
+    maxDataZoom: r.map.maxZoom || 14,
+    minZoom: VECTOR_MIN_ZOOM,
+    maxZoom: 20,
+    bounds: L.latLngBounds([b.south, b.west], [b.north, b.east]),
+    attribution: VECTOR_ATTRIB,
+    className: 'jl-tiles jl-vector',
+    zIndex: 2,
+  });
 }
 
 export function tileTemplate() {

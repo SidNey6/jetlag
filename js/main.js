@@ -20,7 +20,7 @@ import { NATIVE, newerVersion, APK_URL } from './native.js';
 import { el, clear, openSheet, promptSheet, toast, icon, row } from './ui/ui.js';
 import { formatDistance, distance, bearing, formatBearing } from './geo.js';
 
-window.__JL_VERSION__ = 'v1.11.0';
+window.__JL_VERSION__ = 'v1.12.0';
 
 const PANELS = {
   map: 'panel-map', questions: 'panel-questions', timers: 'panel-timers',
